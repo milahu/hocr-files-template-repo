@@ -13,8 +13,8 @@ import psutil
 from PIL import Image, ImageStat
 
 # Directories
-# src = "065-remove-page-borders"
-src = "067-force-lightmode"
+src = "065-remove-page-borders"
+# src = "067-force-lightmode"
 dst = os.path.splitext(os.path.basename(__file__))[0]
 lightness_txt_path = f"{dst}.lightness.txt"
 os.makedirs(dst, exist_ok=True)
