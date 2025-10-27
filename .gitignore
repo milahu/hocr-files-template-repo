@@ -5,3 +5,4 @@ tessdata_best
 *.pdf
 __pycache__
 trash
+070-deskew/*.avif
