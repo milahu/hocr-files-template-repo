@@ -6,3 +6,4 @@ tessdata_best
 __pycache__
 trash
 070-deskew/*.avif
+*.epub
