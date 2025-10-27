@@ -136,7 +136,7 @@ def main():
         # TODO handle black or mixed pages
         # mixed = upper half white + lower half black (or similar)
         background_color = "FFFFFF"  # white
-        if lightness < BLACK_LIGHTNESS_THRESHOLD_2:
+        if lightness < config.BLACK_LIGHTNESS_THRESHOLD_2:
             background_color = "000000"  # black
 
         # Deskew command
