@@ -8,16 +8,36 @@ if [ $# = 0 ]; then
   exit 1
 fi
 
+dst=tessdata_best
+
+# cache downloaded files in ~/.cache/tessdata_best
+cache_dir="$HOME/.cache/tessdata_best"
+
+cd "$(dirname "$0")"
+
+mkdir -p "$dst"
+mkdir -p "$cache_dir"
+
 urls=()
 for lang in "$@"; do
-  [ -e tessdata_best/"$lang".traineddata ] && continue
+  [ -e "$dst/$lang.traineddata" ] && continue
+  [ -e "$cache_dir/$lang.traineddata" ] && continue
   urls+=(https://github.com/tesseract-ocr/tessdata_best/raw/main/"$lang".traineddata)
 done
 
-[ ${#urls[@]} = 0 ] && exit
+if [ ${#urls[@]} != 0 ]; then
+  # write cache
+  pushd "$cache_dir"
+  wget --no-clobber "${urls[@]}"
+  popd
+fi
 
-cd "$(dirname "$0")"
-mkdir -p tessdata_best
-cd tessdata_best
-
-wget --no-clobber "${urls[@]}"
+for lang in "$@"; do
+  [ -e "$dst/$lang.traineddata" ] && continue
+  if [ -e "$cache_dir/$lang.traineddata" ]; then
+    # read cache
+    ln -sr "$cache_dir/$lang.traineddata" "$dst/$lang.traineddata"
+  else
+    echo "error: missing cache file: $cache_dir/$lang.traineddata"
+  fi
+done
