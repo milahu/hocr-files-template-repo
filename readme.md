@@ -34,3 +34,9 @@ this repo is based on
 if you want to copy this repo,
 then please copy the template repo,
 which has the latest versions of all files.
+
+
+
+## related
+
+- [github.com/milahu/books](https://github.com/milahu/books)
