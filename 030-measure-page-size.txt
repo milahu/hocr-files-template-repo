@@ -14,5 +14,6 @@ scan_resolution=600
 scan_format=tiff
 
 # these values depend on the scanner model
+#scan_mode="24bit Color[Fast]"
 scan_mode="True Gray"
 scan_source="Automatic Document Feeder(left aligned,Duplex)"
