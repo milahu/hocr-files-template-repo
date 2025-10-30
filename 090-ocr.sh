@@ -52,8 +52,8 @@ for inp in ../"$src"/*."$scan_format"; do
   if ! [ -e $out1 ]; then
     # TODO? use OCRopus https://github.com/ocropus-archive/DUP-ocropy
     echo + \
-    tesseract "$inp" - -c tessedit_create_hocr=1 --dpi "$scan_resolution" -l "$ocr_lang" --oem 1 --psm 6 --tessdata-dir ../tessdata_best
-    tesseract "$inp" - -c tessedit_create_hocr=1 --dpi "$scan_resolution" -l "$ocr_lang" --oem 1 --psm 6 --tessdata-dir ../tessdata_best >$out1
+    tesseract "$inp" - -c tessedit_create_hocr=1 --dpi "$scan_resolution" -l "$ocr_lang" --tessdata-dir ../tessdata_best
+    tesseract "$inp" - -c tessedit_create_hocr=1 --dpi "$scan_resolution" -l "$ocr_lang" --tessdata-dir ../tessdata_best >$out1
   fi
 
   if false; then
