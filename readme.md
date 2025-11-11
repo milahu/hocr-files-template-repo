@@ -37,6 +37,18 @@ which has the latest versions of all files.
 
 
 
+## epub readers
+
+most epub readers suck...
+
+epub is a zip archive of html files,
+so a good epub reader is just a good html reader, aka web browser
+
+the unpacked epub files in this repo are optimized for web browsers, not for epub readers.
+if your epub reader fails to open these files, then just use a web browser
+
+
+
 ## related
 
 - [github.com/milahu/books](https://github.com/milahu/books)
