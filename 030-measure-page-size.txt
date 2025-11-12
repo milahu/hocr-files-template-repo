@@ -1,7 +1,5 @@
 # TODO set config values
 
-# scan time: 603 seconds for 590 pages = 1.022 seconds per page
-# the last 2 pages are empty
 num_pages=592
 scan_x=147
 scan_y=231
