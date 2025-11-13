@@ -7,3 +7,4 @@ __pycache__
 trash
 070-deskew/*.avif
 *.epub
+*.hocr
