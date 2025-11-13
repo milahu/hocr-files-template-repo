@@ -1,6 +1,12 @@
 # TODO set config values
 
 num_pages=592
+
+# NOTE this should be the full page size in millimeters
+# full size = before the book binding was removed
+# this size is used
+# 1. in 040-scan-pages.sh
+# 2. in 065-remove-page-borders.py to restore the original page size
 scan_x=147
 scan_y=231
 
