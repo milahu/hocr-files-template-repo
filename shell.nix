@@ -43,6 +43,7 @@ mkShell {
       ocrmypdf
       psutil
       pypdf2
+      scikit-image # skimage
     ]))
 
     img2pdf
