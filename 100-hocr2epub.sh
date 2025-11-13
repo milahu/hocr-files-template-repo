@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
-set -eux
+set -eu
 
-dst=$(basename "$0" .sh).epub
+# dst=$(basename "$0" .sh).epub
+dst=.
 
 doc_title="$(head -n1 readme.md | sed 's/^#\s*//')"
 
@@ -12,7 +13,7 @@ else
   source 030-measure-page-size.txt
 fi
 
-if [ -e "$dst" ]; then
+if [ "$dst" != "." ] && [ -e "$dst" ]; then
   echo "error: output exists: $dst"
   exit 1
 fi
@@ -23,14 +24,30 @@ scale=$(python -c "print(300 / $scan_resolution)")
 args=(
   hocr-to-epub-fxl
   --output "$dst"
+)
+if [ "$dst" = "." ]; then
+  args+=(
+    --output-unpacked
+  )
+fi
+args+=(
   --scale "$scale"
   --image-format avif
   --text-format svg
   --doc-title "$doc_title"
-  *-ocr/*.hocr
 )
 
-"${args[@]}" "$@"
+printf '>'
+for a in "${args[@]}" "$@"; do printf ' %q' "$a"; done
+echo ' *-ocr/*.hocr'
+
+"${args[@]}" "$@" *-ocr/*.hocr
+
+if [ "$dst" = "." ]; then
+  echo "done ./index.html"
+  exit
+fi
+
 echo "done $dst"
 
 rm -rf $dst.unzip
