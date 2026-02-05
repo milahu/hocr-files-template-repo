@@ -36,15 +36,34 @@ args+=(
   --text-format html
   --doc-title "$doc_title"
 )
+todo_args+=(
+  --doc-title ""
+  --doc-subtitle ""
+  --doc-description ""
+  --doc-subject ""
+  --doc-modified "$(git show -s --format=%cI HEAD)"
+  --doc-date 2025
+  --doc-edition 1
+  --doc-extent "123 pages"
+  --doc-author ""
+  --doc-introducer ""
+  --doc-contributor ""
+  --doc-translator ""
+  --doc-publisher ""
+  --doc-language de
+  --doc-isbn 0000000000000
+  --doc-cover-image 070-deskew/999.tiff
+  --canonical-url-base https://milahu.github.io/todo/
+)
 
-printf '>'
+ printf '>'
 for a in "${args[@]}" "$@"; do printf ' %q' "$a"; done
 echo ' *-ocr/*.hocr'
 
 "${args[@]}" "$@" *-ocr/*.hocr
 
 if [ "$dst" = "." ]; then
-  echo "done ./index.html"
+  echo "done ./index.xhtml"
   exit
 fi
 
