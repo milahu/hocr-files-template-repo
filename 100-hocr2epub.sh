@@ -30,18 +30,28 @@ if [ "$dst" = "." ]; then
     --output-unpacked
   )
 fi
+
+doc_modified=$(
+  {
+    git show -s --format=%cI HEAD
+    stat -c%y 090-ocr | sed -E 's/^([0-9-]+) ([0-9:]+)\.[0-9]+ ([+-][0-9]{2})([0-9]{2})$/\1T\2\3:\4/'
+  } |
+  LANG=C sort |
+  tail -n1
+)
+
 args+=(
   --scale "$scale"
   --image-format avif
   --text-format html
   --doc-title "$doc_title"
+  --doc-modified "$doc_modified"
 )
 todo_args+=(
   --doc-title ""
   --doc-subtitle ""
   --doc-description ""
   --doc-subject ""
-  --doc-modified "$(git show -s --format=%cI HEAD)"
   --doc-date 2025
   --doc-edition 1
   --doc-extent "123 pages"
