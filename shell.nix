@@ -44,7 +44,7 @@ mkShell {
       reportlab
       ocrmypdf
       psutil
-      pypdf2
+      # pypdf2 # python3.13-pypdf2-3.0.1 marked as insecure
       scikit-image # skimage
     ]))
 
