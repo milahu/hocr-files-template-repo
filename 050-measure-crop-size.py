@@ -18,10 +18,11 @@ crop_odd_box = (crop_x, 0, crop_x + crop_size[0], crop_size[1])
 crop_even_box = (0, 0, crop_size[0], crop_size[1])
 
 # --- Level / brightness normalization ---
+# leveling is useful to remove noise
+# from black and white areas in text
+# but too much leveling causes too much loss in contrast
+# in darkgray and lightgray areas in grayscale graphics
 do_level = True
-
-# lowthresh = 0.2 is too dark for the book cover -> use 0.1
-# lowthresh = 0.1 # about 25/255 in GIMP
-lowthresh = 0.2 # about 50/255 in GIMP
-highthresh = 0.9 # about 230/255 in GIMP
+lowthresh = 0.05 # about 15/255 in GIMP
+highthresh = 0.95 # about 240/255 in GIMP
 # level = f"{lowthresh}x{highthresh}%"
