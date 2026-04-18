@@ -376,7 +376,10 @@ def process_image(in_path, out_path):
     img = cv2.imread(in_path, cv2.IMREAD_UNCHANGED)
     if img is None:
         print("Failed to read", in_path); return
+    input_is_grayscale = (len(img.shape) == 2)
     if len(img.shape) == 2:
+        # OpenCV expects 3-channel images for many operations
+        # later convert back to grayscale
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     H_img, W_img = img.shape[:2]
 
@@ -674,7 +677,14 @@ def process_image(in_path, out_path):
     canvas = warped.copy()
     empty = (eroded_mask == 0)
     if np.any(empty):
-        canvas[empty] = (255, 255, 255) # fill white
+        # fill white
+        if input_is_grayscale:
+            canvas[empty] = 255
+        else:
+            canvas[empty] = (255, 255, 255)
+
+    if input_is_grayscale:
+        canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
 
     ensure_dir(os.path.dirname(out_path))
     cv2.imwrite(out_path, canvas)
