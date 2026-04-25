@@ -29,6 +29,8 @@ mkShell {
     # https://github.com/internetarchive/archive-hocr-tools/pull/23
     nur.repos.milahu.archive-hocr-tools
 
+    nur.repos.milahu.archive-pdf-tools # recode_pdf
+
     epubcheck
 
     # gImageReader
