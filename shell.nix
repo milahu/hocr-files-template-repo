@@ -53,5 +53,7 @@ mkShell {
     img2pdf
 
     # nur.repos.milahu.pdfjam
+
+    libtiff # tiffcp
   ];
 }
