@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 
-src=070-deskew
+# src=077-compress-jpeg; src_ext=jpg
+
+src=OEBPS/images; src_ext=avif
+
 dst=$(basename "$0" .sh).pdf
 tmp=$(basename "$0" .sh)-tmp
 
@@ -16,7 +19,7 @@ fi
 
 mkdir -p $tmp
 
-for i in $src/*.tiff; do
+for i in $src/*.$src_ext; do
   o=$tmp/${i##*/}
   [ -e "$o" ] && continue
   if ! is_opaque=$(identify -format '%[opaque]' "$i"); then
@@ -45,5 +48,5 @@ for i in $src/*.tiff; do
 done
 
 echo "calling img2pdf. this will take some time..."
-echo "+ img2pdf --output $dst --pagesize A4 --border 0cm $tmp/*.tiff"
-img2pdf --output $dst --pagesize A4 --border 0cm $tmp/*.tiff
+echo "+ img2pdf --output $dst --pagesize A4 --border 0cm $tmp/*.$src_ext"
+img2pdf --output $dst --pagesize A4 --border 0cm $tmp/*.$src_ext
