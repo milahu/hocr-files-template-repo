@@ -3,7 +3,8 @@
 set -eu
 
 cd "$(dirname "$0")"
-src=070-deskew
+# src=070-deskew
+src=077-compress-jpeg
 dst=$(basename "$0" .sh)
 
 mkdir -p $dst
@@ -19,6 +20,8 @@ else
   ocr_lang=deu+eng
   # ocr_lang=eng
 fi
+
+scan_format=jpg # src=077-compress-jpeg
 
 # not used
 # this must be compatible with the hocr-editor
@@ -39,13 +42,13 @@ num_pages=0
 for inp in ../"$src"/*."$scan_format"; do
 
   # FIXME use $num_pages and $scan_format
-  page_number=${inp%.tiff}
+  page_number=${inp%.*}
   page_number=${page_number##*/}
   page_number=${page_number#0}
   page_number=${page_number#0}
 
   out=${inp##*/}
-  out=${out%.tiff}
+  out=${out%.*}
   # out=$dst/$out
 
   out1=$out.hocr
