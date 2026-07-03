@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 
+# set -x # debug
+
 cd "$(dirname "$0")"
 datetime=$(date -Is | tr : -)
-tmp=$(basename "$0" .sh).tmp.$datetime
 src=070-deskew
-dst=070-deskew # replace files
-bak=070-deskew.bak.$datetime
+dst=$(basename "$0" .sh)
+# dst="$src" # replace files in src
+
+if [ "$src" = "$dst" ]; then
+  tmp=$(basename "$0" .sh).tmp.$datetime
+  bak=070-deskew.bak.$datetime
+  replace=true
+else
+  replace=false
+  mkdir -p "$dst"
+fi
 
 jpeg_quality=90
 
@@ -23,10 +33,12 @@ function check_command() {
 check_command tiffinfo
 check_command identify
 
-mkdir -p "$tmp"
+if $replace; then
+  mkdir -p "$tmp"
 
-echo "creating $bak"
-mkdir -p "$bak"
+  echo "creating $bak"
+  mkdir -p "$bak"
+fi
 
 num_done=0
 
@@ -43,12 +55,19 @@ for f in "$src"/*.$scan_format; do
 
     # echo "f: ${f@Q}" # debug
 
-    f_tmp="$tmp/$base_dst"
-    f_dst="$src/$base_dst"
-    f_bak="$bak/$base"
+    if $replace; then
+      f_tmp="$tmp/$base_dst"
+      f_dst="$src/$base_dst"
+      f_bak="$bak/$base"
+    else
+      f_dst="$dst/$base_dst"
+      f_tmp="$f_dst"
+    fi
 
     compression=$(tiffinfo "$f" | grep Compression | sed -E 's/^.*?: //')
     # echo "compression: ${compression@Q}" # debug
+
+    # compression should be "LZW"
 
     # if [ "$compression" != "JPEG" ]; then
     if true; then
@@ -66,7 +85,6 @@ for f in "$src"/*.$scan_format; do
         fi
         fi
 
-        # echo "fixing $f from compression ${compression@Q}"
         magick "$f" \
             $colorspace_args \
             -compress JPEG \
@@ -77,8 +95,11 @@ for f in "$src"/*.$scan_format; do
 
         if ((size_b < size_a)); then
             size_b_percent=$(expr "$size_b" "*" 100 / "$size_a")
-            echo "fixing $f: compression: ${compression@Q} -> JPEG. file size: $size_a -> $size_b (${size_b_percent}%)"
+            echo "compressing $f: compression: ${compression@Q} -> JPEG. file size: $size_a -> $size_b (${size_b_percent}%)"
+        fi
+        # else: compression made it worse
 
+        if $replace && ((size_b < size_a)); then
             # backup
             cp --link "$f" "$f_bak"
 
@@ -92,7 +113,11 @@ for f in "$src"/*.$scan_format; do
             fi
 
             num_done=$((num_done + 1))
-        # else: compression made it worse
+        # else: $replace == false -> "$f_tmp" == "$f_dst"
+        fi
+
+        if ! $replace; then
+            num_done=$((num_done + 1))
         fi
 
     # else
@@ -102,10 +127,12 @@ for f in "$src"/*.$scan_format; do
 
 done
 
-rmdir "$tmp"
+if $replace; then
+    rmdir "$tmp"
+fi
 
-if [ $num_done = 0 ]; then
+if $replace && [ $num_done = 0 ]; then
   rmdir "$bak" 2>/dev/null
 fi
 
-echo "done. fixed $num_done images"
+echo "done. compressed $num_done images"
