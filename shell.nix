@@ -51,6 +51,7 @@ mkShell {
       # pypdf2 # python3.13-pypdf2-3.0.1 marked as insecure
       scikit-image # skimage
       nur.repos.milahu.python3.pkgs.doxapy
+      requests
     ]))
 
     img2pdf
