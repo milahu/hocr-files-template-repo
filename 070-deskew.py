@@ -16,7 +16,7 @@ from PIL import Image, ImageStat
 src = "065-remove-page-borders"
 # src = "067-force-lightmode"
 dst = os.path.splitext(os.path.basename(__file__))[0]
-lightness_txt_path = f"{dst}.lightness.txt"
+lightness_txt_path = Path("0683-lightness.txt")
 os.makedirs(dst, exist_ok=True)
 
 
@@ -80,44 +80,44 @@ def main():
     t1 = int(time.time())
     num_pages = 0
 
-    # Collect all TIFF files that actually need processing
-    tiff_files = []
+    r'''
+    # Collect all image files
+    image_files = []
     for f in sorted(os.listdir(src)):
-        if not f.lower().endswith(".tiff"):
-            continue
         in_path = os.path.join(src, f)
-        if 1:
-            # also process files that already exist in output
-            tiff_files.append(in_path)
+        if not os.path.isfile(in_path):
             continue
-        out_path = os.path.join(dst, f)
-        if os.path.exists(out_path):
-            # Skip files that already exist in output
-            continue
-        tiff_files.append(in_path)
+        image_files.append(in_path)
+    '''
 
-    # Compute lightness in parallel
+    # load lightness file
     page_lightness = {}
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(try_compute_lightness, f): f for f in tiff_files}
-        for future in as_completed(futures):
-            res, err = future.result()
-            if err is not None:
-                executor.shutdown(cancel_futures=True)
-                raise err  # propagate exception to main
-            filename, lightness = res
-            page_lightness[filename] = lightness
-            print(f"lightness: {lightness:10.6f} {filename}")
+    image_files = []
+    with lightness_txt_path.open() as f:
+        for lineno, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
 
-    with open(lightness_txt_path, "w", encoding="utf8") as fd:
-        # sort by lightness descending
-        for (filename, lightness) in sorted(page_lightness.items(), key=lambda x: -x[1]):
-            fd.write(f"{lightness:010.6f} {filename}\n")
+            try:
+                lightness_str, filename = line.split(" ", 1)
+                lightness = float(lightness_str)
+            except ValueError:
+                print(f"Skipping malformed line {lineno}: {line}", file=sys.stderr)
+                continue
+
+            image_path = Path(src) / filename
+
+            if not image_path.exists():
+                print(f"Error: Missing file: {image_path}", file=sys.stderr)
+                continue
+
+            page_lightness[filename] = lightness
+            image_files.append(image_path)
 
     # Deskew non-empty pages
-    for filepath in tiff_files:
+    for filepath in image_files:
         filename = os.path.basename(filepath)
-        # page_number = int(filename[:-5])  # strip ".tiff" suffix
         out_path = os.path.join(dst, filename)
 
         if os.path.exists(out_path):
@@ -142,9 +142,9 @@ def main():
         # Deskew command
         deskew_args = [
             "deskew",
-            "-o", out_path,
+            "-o", str(out_path),
             "-b", background_color,
-            filepath
+            str(filepath)
         ]
 
         print("+", " ".join(deskew_args))
