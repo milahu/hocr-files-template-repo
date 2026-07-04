@@ -37,7 +37,7 @@ if 0:
     config = DeskewConfig()
 else:
     # load config from file
-    config_path = Path("068-deskew-config.py")
+    config_path = Path("069-deskew-config.py")
     spec = importlib.util.spec_from_file_location("deskew_config", config_path)
     config = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(config)
