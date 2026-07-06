@@ -27,3 +27,4 @@ do_level = True
 lowthresh = 0.05 # about 15/255 in GIMP
 highthresh = 0.95 # about 240/255 in GIMP
 # level = f"{lowthresh}x{highthresh}%"
+lowthresh = 0.2; highthresh = 0.8
