@@ -19,6 +19,7 @@ if [ "$dst" != "." ] && [ -e "$dst" ]; then
 fi
 
 # downscale to 300 dpi
+# 600 dpi -> 300 dpi: 90 MB -> 60 MB
 scale=$(python -c "print(300 / $scan_resolution)")
 
 args=(
