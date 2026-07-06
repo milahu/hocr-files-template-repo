@@ -49,7 +49,8 @@ def run_tesseract(task):
     out_hocr = Path(out_hocr)
 
     if out_hocr.exists():
-        return f"{inp.name}: keeping {out_hocr}"
+        # return f"{inp.name}: keeping {out_hocr}"
+        return None
 
     cmd = [
         "tesseract",
@@ -218,7 +219,8 @@ def main():
 
     with Pool(processes=num_workers) as pool:
         for result in pool.imap_unordered(run_tesseract, tasks):
-            print(result)
+            if result:
+                print(result)
             num_pages += 1
 
     t2 = time.time()
