@@ -42,6 +42,17 @@ else:
     config = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(config)
 
+    config_path = Path("0684-fill-white-pages-config.py")
+    spec = importlib.util.spec_from_file_location("fill_white_pages_config", config_path)
+    fill_white_pages_config = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fill_white_pages_config)
+    if hasattr(config, "config.WHITE_LIGHTNESS_THRESHOLD"):
+        print(
+            "warning: ignoring WHITE_LIGHTNESS_THRESHOLD from 069-deskew-config.py"
+            " in favor of WHITE_LIGHTNESS_THRESHOLD from 0684-fill-white-pages-config.py"
+        )
+    config.WHITE_LIGHTNESS_THRESHOLD = fill_white_pages_config.WHITE_LIGHTNESS_THRESHOLD
+
 
 def get_physical_cpu_count():
     try:
