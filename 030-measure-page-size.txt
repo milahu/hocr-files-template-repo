@@ -15,7 +15,7 @@ scan_x=$((scan_x + 10))
 scan_y=$((scan_y + 10))
 
 scan_resolution=600
-scan_format=tiff
+scan_format=jpg
 
 # these values depend on the scanner model
 #scan_mode="24bit Color[Fast]"

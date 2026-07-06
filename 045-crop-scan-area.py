@@ -11,7 +11,7 @@ the bottom white rectangles are artifacts created by my scanner.
 they are perfectly white rectangles (color #ffffff)
 and above these rectangles, there is always a grey area.
 the white rectangles have 100% width of the image.
-the script should process an input directory with *.tiff images
+the script should process an input directory with *.jpg images
 and write output images to an output directory (same image format).
 the input and output paths should be hard-coded in the script,
 so the script takes no command-line arguments.
@@ -70,7 +70,9 @@ def remove_bottom_white_rectangle(pil_img):
 
 def process_directory():
     for filename in sorted(os.listdir(INPUT_DIR)):
-        if not filename.lower().endswith(".tiff"):
+        # TODO use scan_format from 030-measure-page-size.txt
+        scan_format = "jpg"
+        if not filename.lower().endswith(f".{scan_format}"):
             continue
         input_path = os.path.join(INPUT_DIR, filename)
         output_path = os.path.join(OUTPUT_DIR, filename)
@@ -81,7 +83,8 @@ def process_directory():
         try:
             with Image.open(input_path) as img:
                 cleaned = remove_bottom_white_rectangle(img)
-                cleaned.save(output_path, format="TIFF")
+                # note: format is detected from the file extension
+                cleaned.save(output_path)
                 print(f"writing {output_path}")
         except Exception as exc:
             print(f"error processing {input_path}: {type(exc).__name__}: {exc}")

@@ -47,7 +47,7 @@ max_workers = get_physical_cpu_count() or 1
 def process_page(filepath):
     filename = os.path.basename(filepath)
 
-    # page_number = int(filename[:-5])  # strip ".tiff" suffix
+    # page_number = int(filename.split(".")[0])  # "001.jpg" -> 1
     out_path = os.path.join(dst, filename)
 
     # Compute mean lightness (0–100)
@@ -88,26 +88,29 @@ def main():
     t1 = int(time.time())
     num_pages = 0
 
-    # Collect all TIFF files that actually need processing
-    tiff_files = []
+    # TODO use scan_format from 030-measure-page-size.txt
+    scan_format = "jpg"
+
+    # Collect all image files that actually need processing
+    image_files = []
     for f in sorted(os.listdir(src)):
-        if not f.lower().endswith(".tiff"):
+        if not f.lower().endswith(f".{scan_format}"):
             continue
         in_path = os.path.join(src, f)
         if 1:
             # also process files that already exist in output
-            tiff_files.append(in_path)
+            image_files.append(in_path)
             continue
         out_path = os.path.join(dst, f)
         if os.path.exists(out_path):
             # Skip files that already exist in output
             continue
-        tiff_files.append(in_path)
+        image_files.append(in_path)
 
     # process pages in parallel
     results = []
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(try_process_page, f): f for f in tiff_files}
+        futures = {executor.submit(try_process_page, f): f for f in image_files}
         for future in as_completed(futures):
             res, err = future.result()
             if err is not None:

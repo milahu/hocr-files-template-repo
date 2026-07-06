@@ -114,7 +114,7 @@ def apply_level(img: np.ndarray, low: float = 0.2, high: float = 0.9) -> np.ndar
 # --- Worker ------------------------------------------------------------------
 def process_image(image_path: Path) -> str:
     filename = image_path.name
-    page_number = int(filename.replace(".tiff", ""))
+    page_number = int(filename.split(".")[0]) # "001.jpg" -> 1
     output_path = tmp / filename
     if output_path.exists():
         print(f"keeping {output_path}")
@@ -135,7 +135,7 @@ def process_image(image_path: Path) -> str:
     if config.do_level:
         img = apply_level(img, config.lowthresh, config.highthresh)
 
-    # Save as TIFF
+    # Save image
     cv2.imwrite(str(output_path), img)
     print(f"writing {output_path}")
 

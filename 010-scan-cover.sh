@@ -12,7 +12,7 @@ mkdir -p $dst
 
 set -eux
 
-o="$dst/$(date +%s).tiff"
+o="$dst/$(date +%s).jpg"
 
 args=(
   # sudo
@@ -22,7 +22,7 @@ args=(
   #--resolution=300
   --resolution=600
   # --format=pnm # https://github.com/galfar/deskew/issues/59
-  --format=tiff
+  --format=jpeg
   --mode="Color"
   --progress
   --output-file="$o"

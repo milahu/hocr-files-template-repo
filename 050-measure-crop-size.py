@@ -2,7 +2,8 @@
 Config for 060-rotate-crop-level.py
 """
 
-scan_format = "tiff"
+# TODO use scan_format from 030-measure-page-size.txt
+scan_format = "jpg"
 
 # --- Rotation settings ---
 do_rotate = False

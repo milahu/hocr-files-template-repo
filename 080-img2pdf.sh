@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# src=077-compress-jpeg; src_ext=jpg
+# src=070-deskew; src_ext=jpg
 
 src=OEBPS/images; src_ext=avif
 
@@ -15,7 +15,7 @@ fi
 # NOTE this can fail with
 # raise AlphaChannelError("This function must not be called on images with alpha")
 # https://gitlab.mister-muffin.de/josch/img2pdf/src/commit/bb188a3eaf7d956b82f7f9a18bbda774301c586f/src/img2pdf.py#L1408
-# img2pdf --output $dst --pagesize A4 --border 0cm $src/*.tiff
+# img2pdf --output $dst --pagesize A4 --border 0cm $src/*.jpg
 
 mkdir -p $tmp
 

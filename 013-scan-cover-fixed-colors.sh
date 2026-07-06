@@ -7,7 +7,7 @@ dst=$(basename "$0" .sh)
 
 mkdir -p $dst
 
-for f in 010-scan-cover/*.tiff; do
+for f in 010-scan-cover/*.jpg; do
 
   n="$(basename "$f")"
   f2="$dst/$n"

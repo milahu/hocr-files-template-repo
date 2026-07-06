@@ -13,7 +13,7 @@ else
   scan_source="Automatic Document Feeder(left aligned,Duplex)"
   scan_resolution=300
   # scan_format=pnm # https://github.com/galfar/deskew/issues/59
-  scan_format=tiff
+  scan_format=jpg
 fi
 
 mkdir -p $dst
@@ -22,13 +22,19 @@ set -eux
 
 page_num_fmt="%0${#num_pages}d"
 
+scanimage_scan_format="$scan_format"
+if [ "$scanimage_scan_format" = "jpg" ]; then
+  # "scanimage --format=jpg" does not work
+  scanimage_scan_format=jpeg
+fi
+
 args=(
   sudo
   scanimage
   #--device-name="brother5:bus3;dev1"
   --device-name="$1" # scanimage -L
   --resolution="$scan_resolution"
-  --format="$scan_format"
+  --format="$scanimage_scan_format"
   --mode="$scan_mode"
   --source="$scan_source"
   --MultifeedDetection=yes

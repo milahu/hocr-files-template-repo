@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# TODO remove? this is only needed for scan_format=tiff
+
 cd "$(dirname "$0")"
 datetime=$(date -Is | tr : -)
 tmp=$(basename "$0" .sh).tmp.$datetime
@@ -7,7 +9,7 @@ src=070-deskew
 dst=070-deskew # replace files
 bak=070-deskew.bak.$datetime
 
-# scan_format=tiff
+# scan_format=jpg
 source 030-measure-page-size.txt
 
 function check_command() {

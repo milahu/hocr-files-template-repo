@@ -6,8 +6,14 @@
 
 cd "$(dirname "$0")"
 src_hocr=090-ocr
-src_tiff=070-deskew
+src_image=070-deskew
 dst=$(basename "$0" .sh)
+
+if false; then
+  scan_format=jpg
+else
+  source 030-measure-page-size.txt
+fi
 
 mkdir $dst
 
@@ -17,12 +23,12 @@ for hocr in 090-ocr/*.hocr; do
   page=${page##*/}
 
   hocr=$src_hocr/$page.hocr
-  tiff=$src_tiff/$page.tiff
+  image=$src_image/$page.$scan_format
   pdf=$dst/$page.pdf
 
   [ -e $pdf ] && continue
 
   echo $page
-  recode_pdf --hocr-file $hocr --dpi 300 --out-pdf $pdf --bw-pdf --from-imagestack $tiff
+  recode_pdf --hocr-file $hocr --dpi 300 --out-pdf $pdf --bw-pdf --from-imagestack $image
 
 done

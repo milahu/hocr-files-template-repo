@@ -54,7 +54,7 @@ def get_physical_cpu_count():
 max_workers = get_physical_cpu_count() or 1
 
 def compute_lightness(filepath):
-    """Compute mean lightness (0–100) of a TIFF image."""
+    """Compute mean lightness (0–100) of image in filepath."""
     filename = os.path.basename(filepath)
 
     try:

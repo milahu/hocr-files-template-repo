@@ -12,7 +12,7 @@ import requests
 
 
 # source directory
-src = "077-compress-jpeg"
+src = "070-deskew"
 
 # default config
 scan_resolution = 300
