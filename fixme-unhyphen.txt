@@ -1,0 +1,11 @@
+the current "unhyphen" algo creates space between unhyphened words
+
+example:
+this is some very long line with a bro-
+ken word.
+
+actual result:
+this is some very long line with a bro ken word.
+
+expected result:
+this is some very long line with a broken word.
