@@ -16,11 +16,16 @@ if $print_two_pages_per_page; then
     # prepend empty page to preserve the original book print layout:
     # even pages on the left, odd pages on the right
     # example page_size: 595.276 x 841.89 pts
-    page_size=$(pdfinfo $pdf | grep "^Page size:" | sed -E 's/^Page size:\s+//; s/\((A4|A5)\)$//')
-    echo "page_size: ${page_size@Q}"
-    magick xc:none -page "$page_size" blank-page.pdf
     pdf2=081-img2pdf-print.with-blank-page.pdf
-    pdftk blank-page.pdf $pdf cat output $pdf2
+    if ! [ -e $pdf2 ]; then
+        blank_pdf=blank-page.pdf
+        if ! [ -e $blank_pdf ]; then
+            page_size=$(pdfinfo $pdf | grep "^Page size:" | sed -E 's/^Page size:\s+//; s/\((A4|A5)\)$//')
+            echo "page_size: ${page_size@Q}"
+            magick xc:none -page "$page_size" $blank_pdf
+        fi
+        pdftk $blank_pdf $pdf cat output $pdf2
+    fi
 
     exec lp -o sides=two-sided-short-edge -o media=A4 -o print-quality=best -o number-up=2 "$@" $pdf2
 
