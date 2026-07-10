@@ -3,25 +3,14 @@
 # TODO rewrite 060-rotate-crop-level.sh in python
 # and merge it with this script
 
-"""
-AI prompt:
-
-create a python script to remove bottom white rectangles from scanned images.
-the bottom white rectangles are artifacts created by my scanner.
-they are perfectly white rectangles (color #ffffff)
-and above these rectangles, there is always a grey area.
-the white rectangles have 100% width of the image.
-the script should process an input directory with *.jpg images
-and write output images to an output directory (same image format).
-the input and output paths should be hard-coded in the script,
-so the script takes no command-line arguments.
-the script should be based on the PIL (pillow) image library
-(and on the opencv and numpy libraries when necessary)
-"""
-
 import os
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+import re
+
 import cv2
 import numpy as np
+import psutil
 from PIL import Image
 
 # -----------------------------
@@ -29,6 +18,31 @@ from PIL import Image
 # -----------------------------
 INPUT_DIR = r"040-scan-pages"
 OUTPUT_DIR = r"045-crop-scan-area"
+
+# -----------------------------------------------------------------------------
+# Load configuration (replacement for "source")
+# -----------------------------------------------------------------------------
+
+config = {}
+
+config_file = Path("030-measure-page-size.txt")
+if config_file.exists():
+    with config_file.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", line)
+            if m:
+                config[m.group(1)] = m.group(2)
+
+scan_format = config.get("scan_format")
+
+if not scan_format:
+    sys.exit("error: scan_format not defined")
+
+# -----------------------------------------------------------------------------
 
 # Create output directory if it doesn't exist
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -62,34 +76,45 @@ def remove_bottom_white_rectangle(pil_img):
 
     # Crop only if a white rectangle was found
     if bottom_crop_y < height:
-        cropped_img = pil_img.crop((0, 0, width, bottom_crop_y))
-        return cropped_img
+        return pil_img.crop((0, 0, width, bottom_crop_y))
     else:
         return pil_img
 
 
-def process_directory():
-    for filename in sorted(os.listdir(INPUT_DIR)):
-        # TODO use scan_format from 030-measure-page-size.txt
-        scan_format = "tiff"
-        if not filename.lower().endswith(f".{scan_format}"):
-            continue
-        input_path = os.path.join(INPUT_DIR, filename)
-        output_path = os.path.join(OUTPUT_DIR, filename)
-        if os.path.exists(output_path):
-            print(f"keeping {output_path}")
-            continue
+def process_file(filename):
+    if not filename.lower().endswith(f".{scan_format}"):
+        return
 
-        try:
-            with Image.open(input_path) as img:
-                cleaned = remove_bottom_white_rectangle(img)
-                # note: format is detected from the file extension
-                cleaned.save(output_path)
-                print(f"writing {output_path}")
-        except Exception as exc:
-            print(f"error processing {input_path}: {type(exc).__name__}: {exc}")
+    input_path = os.path.join(INPUT_DIR, filename)
+    output_path = os.path.join(OUTPUT_DIR, filename)
+
+    if os.path.exists(output_path):
+        print(f"keeping {output_path}")
+        return
+
+    try:
+        with Image.open(input_path) as img:
+            cleaned = remove_bottom_white_rectangle(img)
+            # note: format is detected from the file extension
+            cleaned.save(output_path)
+            print(f"writing {output_path}")
+    except Exception as exc:
+        print(f"error processing {input_path}: {type(exc).__name__}: {exc}")
+
+
+def process_directory():
+    filenames = sorted(os.listdir(INPUT_DIR))
+
+    suffix = f".{scan_format}"
+    filenames = list(filter(lambda n: n.endswith(suffix), filenames))
+
+    num_workers = psutil.cpu_count(logical=False) or 1
+
+    print(f"Using {num_workers} workers...")
+
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        list(executor.map(process_file, filenames))
 
 
 if __name__ == "__main__":
     process_directory()
-    # print("Done.")
