@@ -10,6 +10,8 @@ num_pages=592
 scan_x=147
 scan_y=231
 
+# scan_x=210; scan_y=297 # DIN A4
+
 # add margin
 scan_x=$((scan_x + 10))
 scan_y=$((scan_y + 10))
