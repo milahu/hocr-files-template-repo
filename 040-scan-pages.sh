@@ -29,7 +29,7 @@ if [ "$scanimage_scan_format" = "jpg" ]; then
 fi
 
 args=(
-  sudo
+  # sudo
   scanimage
   #--device-name="brother5:bus3;dev1"
   --device-name="$1" # scanimage -L
