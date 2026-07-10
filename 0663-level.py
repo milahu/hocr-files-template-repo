@@ -15,17 +15,42 @@ import numpy as np
 
 # --- Setup -------------------------------------------------------------------
 os.chdir(Path(__file__).resolve().parent)
-src = Path("046-compress")
+src = Path("065-remove-page-borders")
 dst = Path(Path(__file__).stem)
 dst.mkdir(parents=True, exist_ok=True)
 
 
 # --- Settings ----------------------------------------------------------------
-config_path = Path("050-measure-crop-size.py")
+config_path = Path("0662-level-config.py")
 
-spec = importlib.util.spec_from_file_location("measure_crop_size_config", config_path)
+spec = importlib.util.spec_from_file_location("level_config", config_path)
 config = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(config)
+
+
+# --- Helper: level adjustment (contrast stretch) -----------------------------
+def apply_level(img: np.ndarray, low: float = 0.2, high: float = 0.9) -> np.ndarray:
+    """
+    Apply a linear color level adjustment using fractional thresholds.
+    low/high are in [0,1], e.g., 0.2 = 20%, 0.9 = 90%.
+    """
+    if img.dtype == np.uint8:
+        max_val = 255
+    elif img.dtype == np.uint16:
+        max_val = 65535
+    else:
+        raise ValueError(f"Unsupported image dtype: {img.dtype}")
+
+    # Convert fractional thresholds to absolute values
+    low_val = low * max_val
+    high_val = high * max_val
+
+    if high_val <= low_val:
+        return img.copy()
+
+    img_stretched = (img.astype(float) - low_val) * (max_val / (high_val - low_val))
+    img_stretched = np.clip(img_stretched, 0, max_val)
+    return img_stretched.astype(img.dtype)
 
 
 # --- Worker ------------------------------------------------------------------
@@ -37,33 +62,15 @@ def process_image(image_path: Path) -> str:
         print(f"keeping {output_path}")
         return
 
-    crop_box = config.crop_odd_box if page_number % 2 == 1 else config.crop_even_box
-    rotation = config.rotate_odd if page_number % 2 == 1 else config.rotate_even
-
     # Load
     img = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
     if img is None:
         print(f"error: failed to read {image_path}")
         sys.exit(1)
 
-    # Rotate
-    if config.do_rotate:
-        if rotation == 90:
-            img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
-        elif rotation == 270:
-            img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        elif rotation == 180:
-            img = cv2.rotate(img, cv2.ROTATE_180)
-        else:
-            # arbitrary angle
-            h, w = img.shape[:2]
-            M = cv2.getRotationMatrix2D((w/2, h/2), rotation, 1.0)
-            img = cv2.warpAffine(img, M, (w, h))
-
-    # Crop
-    if config.do_crop:
-        x1, y1, x2, y2 = crop_box
-        img = img[y1:y2, x1:x2]
+    # Level (contrast stretch)
+    if config.do_level:
+        img = apply_level(img, config.lowthresh, config.highthresh)
 
     # Save image
     cv2.imwrite(str(output_path), img)
