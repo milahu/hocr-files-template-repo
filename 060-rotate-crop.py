@@ -21,9 +21,9 @@ dst.mkdir(parents=True, exist_ok=True)
 
 
 # --- Settings ----------------------------------------------------------------
-config_path = Path("050-measure-crop-size.py")
+config_path = Path("050-rotate-crop-config.py")
 
-spec = importlib.util.spec_from_file_location("measure_crop_size_config", config_path)
+spec = importlib.util.spec_from_file_location("rotate_crop_config", config_path)
 config = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(config)
 
