@@ -15,7 +15,7 @@ import numpy as np
 
 # --- Setup -------------------------------------------------------------------
 os.chdir(Path(__file__).resolve().parent)
-src = Path("045-crop-scan-area")
+src = Path("046-compress")
 dst = Path(Path(__file__).stem)
 dst.mkdir(parents=True, exist_ok=True)
 
@@ -112,7 +112,7 @@ def try_process_image(*args):
 # --- Parallel execution ------------------------------------------------------
 if __name__ == "__main__":
     t1 = time.time()
-    images = sorted(src.glob(f"*.{config.scan_format}"))
+    images = sorted(src.glob(f"*.{config.image_format}"))
     if not images:
         print("No input files found.")
         exit(0)

@@ -71,7 +71,7 @@ def remove_bottom_white_rectangle(pil_img):
 def process_directory():
     for filename in sorted(os.listdir(INPUT_DIR)):
         # TODO use scan_format from 030-measure-page-size.txt
-        scan_format = "jpg"
+        scan_format = "tiff"
         if not filename.lower().endswith(f".{scan_format}"):
             continue
         input_path = os.path.join(INPUT_DIR, filename)

@@ -698,9 +698,9 @@ def process_image(in_path, out_path):
 
 def main():
     ensure_dir(OUTPUT_DIR)
-    # TODO use scan_format from 030-measure-page-size.txt
-    scan_format = "jpg"
-    files = sorted([f for f in os.listdir(INPUT_DIR) if f.endswith(f".{scan_format}")])
+    # TODO use image_format from 030-measure-page-size.txt
+    image_format = "jpg"
+    files = sorted([f for f in os.listdir(INPUT_DIR) if f.endswith(f".{image_format}")])
     if not files:
         print("No image files found in", INPUT_DIR)
         return

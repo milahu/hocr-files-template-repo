@@ -88,13 +88,13 @@ def main():
     t1 = int(time.time())
     num_pages = 0
 
-    # TODO use scan_format from 030-measure-page-size.txt
-    scan_format = "jpg"
+    # TODO use image_format from 030-measure-page-size.txt
+    image_format = "jpg"
 
     # Collect all image files that actually need processing
     image_files = []
     for f in sorted(os.listdir(src)):
-        if not f.lower().endswith(f".{scan_format}"):
+        if not f.lower().endswith(f".{image_format}"):
             continue
         in_path = os.path.join(src, f)
         if 1:

@@ -2,7 +2,7 @@
 Config for 075-level2.py
 """
 
-scan_format = "jpg"
+image_format = "jpg"
 
 # --- Level / brightness normalization ---
 # leveling is useful to remove noise

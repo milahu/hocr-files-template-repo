@@ -25,7 +25,8 @@ datetime_str = (
     .replace(":", "-")
 )
 
-src = Path("070-deskew")
+# src = Path("040-scan-pages")
+src = Path("045-crop-scan-area")
 dst = Path(Path(__file__).stem)
 # dst = src  # replace files in src
 
@@ -52,10 +53,14 @@ if config_file.exists():
                 config[m.group(1)] = m.group(2)
 
 scan_format = config.get("scan_format")
+image_format = config.get("image_format")
 color_pages = config.get("color_pages", "")
 
 if not scan_format:
     sys.exit("error: scan_format not defined")
+
+if not image_format:
+    sys.exit("error: image_format not defined")
 
 # -----------------------------------------------------------------------------
 
@@ -70,6 +75,18 @@ else:
 if replace:
     tmp.mkdir(parents=True, exist_ok=True)
     bak.mkdir(parents=True, exist_ok=True)
+
+# -----------------------------------------------------------------------------
+
+if scan_format == image_format:
+    print("no change in format -> hardlinking all files from src to dst")
+    # for name in sorted(os.listdir(src)):
+    for f_src in sorted(src.glob(f"*.{scan_format}")):
+        f_dst = dst / f_src.name
+        if f_dst.exists():
+            continue
+        os.link(f_src, f_dst)
+    sys.exit()
 
 # -----------------------------------------------------------------------------
 
@@ -101,7 +118,7 @@ def process_image(args):
     tmp = Path(tmp) if tmp else None
     bak = Path(bak) if bak else None
 
-    base_dst = f.with_suffix(".jpg").name
+    base_dst = f.with_suffix(f".{image_format}").name
 
     if replace:
         f_tmp = tmp / base_dst
@@ -148,7 +165,7 @@ def process_image(args):
 
         img.save(
             f_tmp,
-            format="JPEG",
+            # format="JPEG",
             quality=jpeg_quality,
             optimize=True,
         )
@@ -159,7 +176,9 @@ def process_image(args):
     if size_b < size_a:
         percent = size_b * 100 // size_a
         message = (
-            f"compressing {f}: compression: {compression} -> JPEG. "
+            # my scanner returns uncompressed TIFF files
+            # so compression is always None
+            # f"compressing {f}: compression: {compression} -> JPEG. "
             f"file size: {size_a} -> {size_b} ({percent}%)"
         )
 

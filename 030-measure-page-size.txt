@@ -31,6 +31,9 @@ scan_resolution=600
 # scan_format=pnm
 scan_format=tiff
 
+# for 046-compress.py etc
+image_format=jpg
+
 
 
 # these values depend on the scanner model

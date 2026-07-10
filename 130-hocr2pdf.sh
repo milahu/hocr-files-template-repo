@@ -10,7 +10,7 @@ src_image=070-deskew
 dst=$(basename "$0" .sh)
 
 if false; then
-  scan_format=jpg
+  image_format=jpg
 else
   source 030-measure-page-size.txt
 fi
@@ -23,7 +23,7 @@ for hocr in 090-ocr/*.hocr; do
   page=${page##*/}
 
   hocr=$src_hocr/$page.hocr
-  image=$src_image/$page.$scan_format
+  image=$src_image/$page.$image_format
   pdf=$dst/$page.pdf
 
   [ -e $pdf ] && continue

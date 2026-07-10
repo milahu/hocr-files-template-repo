@@ -16,7 +16,7 @@ src = "070-deskew"
 
 # default config
 scan_resolution = 300
-scan_format = "jpg"
+image_format = "jpg"
 ocr_lang = "deu+eng"
 
 
@@ -169,7 +169,7 @@ def main():
 
     global src
     global scan_resolution
-    global scan_format
+    global image_format
     global ocr_lang
 
     script_dir = Path(__file__).resolve().parent
@@ -186,7 +186,7 @@ def main():
     print(f"ocr_cfg: {json.dumps(ocr_cfg, indent=2)}")
 
     scan_resolution = int(scan_cfg.get("scan_resolution", scan_resolution))
-    # scan_format = scan_cfg.get("scan_format", scan_format)
+    # image_format = scan_cfg.get("image_format", image_format)
     ocr_lang = ocr_cfg.get("ocr_lang", ocr_lang)
 
     tessdata_dir = "tessdata_best"
@@ -207,7 +207,7 @@ def main():
     print(f"num_workers: {num_workers}")
 
     src_dir = Path("..") / src
-    inputs = sorted(src_dir.glob(f"*.{scan_format}"))
+    inputs = sorted(src_dir.glob(f"*.{image_format}"))
 
     tasks = [
         (str(inp), dst / (inp.stem + ".hocr"), scan_resolution, ocr_lang, tessdata_dir)
