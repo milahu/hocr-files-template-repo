@@ -6,7 +6,7 @@ for filling after warping. The original image pixels are preserved and warped di
 """
 
 CONFIG_FILE = "030-measure-page-size.txt"
-INPUT_DIR = "060-rotate-crop-level"
+INPUT_DIR = "060-rotate-crop"
 OUTPUT_DIR = "065-remove-page-borders"
 
 # === Tuning parameters ===

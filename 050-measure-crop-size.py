@@ -1,5 +1,5 @@
 """
-Config for 060-rotate-crop-level.py
+Config for 060-rotate-crop.py
 """
 
 # TODO use image_format from 030-measure-page-size.txt
