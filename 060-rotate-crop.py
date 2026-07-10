@@ -88,6 +88,15 @@ if __name__ == "__main__":
         print("No input files found.")
         exit(0)
 
+    if config.do_rotate == False and config.do_crop == False:
+        print("no rotate, no crop -> hardlinking all files from src to dst")
+        for f_src in images:
+            f_dst = dst / f_src.name
+            if f_dst.exists():
+                continue
+            os.link(f_src, f_dst)
+        sys.exit()
+
     num_workers = psutil.cpu_count(logical=False) or 1
     print(f"Using {num_workers} workers...")
 
