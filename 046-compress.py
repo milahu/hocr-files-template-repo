@@ -11,6 +11,11 @@ from pathlib import Path
 import psutil
 from PIL import Image
 
+from _shared import (
+    load_config,
+    get_page_num,
+)
+
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
@@ -34,27 +39,11 @@ jpeg_quality = 90
 
 num_workers = psutil.cpu_count(logical=False) or 1
 
-# -----------------------------------------------------------------------------
-# Load configuration (replacement for "source")
-# -----------------------------------------------------------------------------
+config = load_config()
 
-config = {}
-
-config_file = Path("030-measure-page-size.txt")
-if config_file.exists():
-    with config_file.open() as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-
-            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", line)
-            if m:
-                config[m.group(1)] = m.group(2)
-
-scan_format = config.get("scan_format")
-image_format = config.get("image_format")
-color_pages = config.get("color_pages", "")
+scan_format = config.scan_format
+image_format = config.image_format
+color_pages = config.color_pages
 
 if not scan_format:
     sys.exit("error: scan_format not defined")
@@ -145,7 +134,7 @@ def process_image(args):
         if False:
             if (
                 not color_pages
-                or str(page_num) not in color_pages.split(",")
+                or page_num not in color_pages
             ):
                 img = img.convert("L")
 
