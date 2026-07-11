@@ -13,34 +13,18 @@ import numpy as np
 import psutil
 from PIL import Image
 
+from _shared import (
+    load_config,
+    get_page_num,
+)
+
 # -----------------------------
 # Hard-coded paths
 # -----------------------------
 INPUT_DIR = r"040-scan-pages"
 OUTPUT_DIR = r"045-crop-scan-area"
 
-# -----------------------------------------------------------------------------
-# Load configuration (replacement for "source")
-# -----------------------------------------------------------------------------
-
-config = {}
-
-config_file = Path("030-measure-page-size.txt")
-if config_file.exists():
-    with config_file.open() as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-
-            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", line)
-            if m:
-                config[m.group(1)] = m.group(2)
-
-scan_format = config.get("scan_format")
-
-if not scan_format:
-    sys.exit("error: scan_format not defined")
+config = load_config()
 
 # -----------------------------------------------------------------------------
 
@@ -82,7 +66,7 @@ def remove_bottom_white_rectangle(pil_img):
 
 
 def process_file(filename):
-    if not filename.lower().endswith(f".{scan_format}"):
+    if not filename.lower().endswith(f".{config.scan_format}"):
         return
 
     input_path = os.path.join(INPUT_DIR, filename)
@@ -105,7 +89,7 @@ def process_file(filename):
 def process_directory():
     filenames = sorted(os.listdir(INPUT_DIR))
 
-    suffix = f".{scan_format}"
+    suffix = f".{config.scan_format}"
     filenames = list(filter(lambda n: n.endswith(suffix), filenames))
 
     num_workers = psutil.cpu_count(logical=False) or 1
