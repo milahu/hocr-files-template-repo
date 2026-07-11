@@ -2,6 +2,8 @@
 
 num_pages = 592
 
+color_pages = []
+
 # NOTE this should be the full page size in millimeters
 # full size = before the book binding was removed
 # this size is used
