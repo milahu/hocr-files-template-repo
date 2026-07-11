@@ -96,7 +96,7 @@ def run_tesseract(task):
 
 def download_tessdata_best(langs, dst="tessdata_best"):
     """
-    Download Tesseract tessdata_best models with caching (Python version of tessdata_best.sh)
+    Download Tesseract tessdata_best models with caching
     """
 
     if not langs:
