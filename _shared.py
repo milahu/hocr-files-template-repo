@@ -2,7 +2,7 @@ from pathlib import Path
 import importlib.util
 import re
 
-config_path = Path("030-measure-page-size.py")
+config_path = Path("000-config.py")
 
 def load_config(config_path=config_path):
     spec = importlib.util.spec_from_file_location("config", config_path)
