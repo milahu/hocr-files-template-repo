@@ -11,7 +11,7 @@ OUTPUT_DIR = "065-remove-page-borders"
 # === Tuning parameters ===
 DEBUG = True
 DEBUG = False
-BORDER_SIZE = 0
+BORDER_SIZE = 100  # pixels
 
 # Number of pixels to fill with the page background color inside the bad page edge
 # to remove faint grey line artifacts
@@ -24,6 +24,12 @@ RANSAC_MIN_INLIERS = 20
 
 THRESH_HIGH_PERCENTILE = 99
 THRESH_MIN = 200
+
+# without a9dc2b24e6b0d1d49b6fc232223d6431ba3442a5 bad: fix perspective transform for broken ADF scanners
+HANDLE_BROKEN_SCANNER = False
+
+# with a9dc2b24e6b0d1d49b6fc232223d6431ba3442a5 bad: fix perspective transform for broken ADF scanners
+# HANDLE_BROKEN_SCANNER = True
 
 import os
 import re
@@ -256,6 +262,18 @@ def build_affine_without_shear(pt_v_top, pt_v_bot, expected_w, expected_h, bad_o
 
     return M, src_corners, dst_corners, "ok"
 
+
+def order_points(pts):
+    rect = np.zeros((4, 2), dtype="float32")
+    s = pts.sum(axis=1)
+    diff = np.diff(pts, axis=1)
+    rect[0] = pts[np.argmin(s)]  # top-left
+    rect[2] = pts[np.argmax(s)]  # bottom-right
+    rect[1] = pts[np.argmin(diff)]  # top-right
+    rect[3] = pts[np.argmax(diff)]  # bottom-left
+    return rect
+
+
 def process_image(in_path, out_path):
     """
     Robust page extraction that handles missing top (or bottom) edges.
@@ -380,290 +398,411 @@ def process_image(in_path, out_path):
         save_dbg(gray, os.path.join(dbgdir, "01_gray.png"))
         save_dbg(mask_init, os.path.join(dbgdir, f"02_thresh_thr{thr}_hp{hp}.png"))
 
-    # --- remove vertical streaks but preserve holes ---
-    streaks = detect_vertical_streaks(mask_init)
-    mask_nostreak = mask_init.copy()
-    mask_nostreak[streaks == 255] = 0
-    page_mask_with_holes = keep_largest_component(mask_nostreak)
-    if DEBUG:
-        save_dbg(streaks, os.path.join(dbgdir, "03_streaks.png"))
-        save_dbg(mask_nostreak, os.path.join(dbgdir, "04_mask_nostreak.png"))
-        save_dbg(page_mask_with_holes, os.path.join(dbgdir, "05_page_mask_with_holes.png"))
+    if HANDLE_BROKEN_SCANNER:
+        # with a9dc2b24e6b0d1d49b6fc232223d6431ba3442a5 bad: fix perspective transform for broken ADF scanners
+        # --- remove vertical streaks but preserve holes ---
+        streaks = detect_vertical_streaks(mask_init)
+        mask_nostreak = mask_init.copy()
+        mask_nostreak[streaks == 255] = 0
+        page_mask_with_holes = keep_largest_component(mask_nostreak)
+        if DEBUG:
+            save_dbg(streaks, os.path.join(dbgdir, "03_streaks.png"))
+            save_dbg(mask_nostreak, os.path.join(dbgdir, "04_mask_nostreak.png"))
+            save_dbg(page_mask_with_holes, os.path.join(dbgdir, "05_page_mask_with_holes.png"))
 
-    # --- contour and filled mask (no holes) ---
-    contours, _ = cv2.findContours(page_mask_with_holes, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    if not contours:
-        print(f"No contours for {in_path}"); return
-    page_contour = max(contours, key=lambda c: cv2.contourArea(c))
-    contour_pts = contour_to_pts(page_contour)
+        # --- contour and filled mask (no holes) ---
+        contours, _ = cv2.findContours(page_mask_with_holes, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        if not contours:
+            print(f"No contours for {in_path}"); return
+        page_contour = max(contours, key=lambda c: cv2.contourArea(c))
+        contour_pts = contour_to_pts(page_contour)
 
-    filled_page_mask = np.zeros_like(page_mask_with_holes)
-    cv2.drawContours(filled_page_mask, [page_contour], -1, 255, thickness=-1)
-    if DEBUG:
-        save_dbg(filled_page_mask, os.path.join(dbgdir, "06_filled_page_mask.png"))
-        overlay = img.copy()
-        cv2.drawContours(overlay, [page_contour], -1, (0,255,0), 2)
-        save_dbg(overlay, os.path.join(dbgdir, "07_contour_overlay.png"))
+        filled_page_mask = np.zeros_like(page_mask_with_holes)
+        cv2.drawContours(filled_page_mask, [page_contour], -1, 255, thickness=-1)
+        if DEBUG:
+            save_dbg(filled_page_mask, os.path.join(dbgdir, "06_filled_page_mask.png"))
+            overlay = img.copy()
+            cv2.drawContours(overlay, [page_contour], -1, (0,255,0), 2)
+            save_dbg(overlay, os.path.join(dbgdir, "07_contour_overlay.png"))
 
-    # --- candidate sets for RANSAC ---
-    ys = contour_pts[:,1]; xs = contour_pts[:,0]
-    top_cand = contour_pts[ys <= np.percentile(ys, 20)]
-    bottom_cand = contour_pts[ys >= np.percentile(ys, 80)]
-    left_cand = contour_pts[xs <= np.percentile(xs, 20)]
-    right_cand = contour_pts[xs >= np.percentile(xs, 80)]
-    if len(top_cand) < 20: top_cand = contour_pts[np.argsort(ys)[:max(20, len(contour_pts)//8)]]
-    if len(bottom_cand) < 20: bottom_cand = contour_pts[np.argsort(ys)[-max(20, len(contour_pts)//8):]]
-    if len(left_cand) < 12: left_cand = contour_pts[np.argsort(xs)[:max(12, len(contour_pts)//10)]]
-    if len(right_cand) < 12: right_cand = contour_pts[np.argsort(xs)[-max(12, len(contour_pts)//10):]]
+        # --- candidate sets for RANSAC ---
+        ys = contour_pts[:,1]; xs = contour_pts[:,0]
+        top_cand = contour_pts[ys <= np.percentile(ys, 20)]
+        bottom_cand = contour_pts[ys >= np.percentile(ys, 80)]
+        left_cand = contour_pts[xs <= np.percentile(xs, 20)]
+        right_cand = contour_pts[xs >= np.percentile(xs, 80)]
+        if len(top_cand) < 20: top_cand = contour_pts[np.argsort(ys)[:max(20, len(contour_pts)//8)]]
+        if len(bottom_cand) < 20: bottom_cand = contour_pts[np.argsort(ys)[-max(20, len(contour_pts)//8):]]
+        if len(left_cand) < 12: left_cand = contour_pts[np.argsort(xs)[:max(12, len(contour_pts)//10)]]
+        if len(right_cand) < 12: right_cand = contour_pts[np.argsort(xs)[-max(12, len(contour_pts)//10):]]
 
-    # --- fit lines robustly ---
-    top_vx, top_vy, top_x0, top_y0, top_inliers = fit_line_ransac(top_cand)
-    bottom_vx, bottom_vy, bottom_x0, bottom_y0, bottom_inliers = fit_line_ransac(bottom_cand)
-    if bad_on_left:
-        vert_vx, vert_vy, vert_x0, vert_y0, vert_inliers = fit_line_ransac(right_cand)
-    else:
-        vert_vx, vert_vy, vert_x0, vert_y0, vert_inliers = fit_line_ransac(left_cand)
-
-    # counts for diagnostics
-    top_in_count = int(np.count_nonzero(top_inliers)) if isinstance(top_inliers, (list, np.ndarray)) else len(top_cand)
-    bottom_in_count = int(np.count_nonzero(bottom_inliers)) if isinstance(bottom_inliers, (list, np.ndarray)) else len(bottom_cand)
-    vert_in_count = int(np.count_nonzero(vert_inliers)) if isinstance(vert_inliers, (list, np.ndarray)) else len(right_cand if bad_on_left else left_cand)
-
-    if DEBUG:
-        viz = img.copy()
-        cv2.drawContours(viz, [page_contour], -1, (0,255,0), 2)
-        def draw_line(vx,vy,x0,y0,color,label):
-            norm = math.hypot(vx,vy)
-            if norm < 1e-6: return
-            ux, uy = vx/norm, vy/norm
-            L = max(W_img, H_img) * 2
-            p1 = (int(x0 - ux*L), int(y0 - uy*L))
-            p2 = (int(x0 + ux*L), int(y0 + uy*L))
-            cv2.line(viz, p1, p2, color, 2)
-            cv2.putText(viz, f"{label}:{(top_in_count if label=='top' else bottom_in_count if label=='bottom' else vert_in_count)}",
-                        (int(x0), int(y0)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-        draw_line(top_vx, top_vy, top_x0, top_y0, (255,0,0), "top")
-        draw_line(bottom_vx, bottom_vy, bottom_x0, bottom_y0, (0,0,255), "bottom")
-        draw_line(vert_vx, vert_vy, vert_x0, vert_y0, (0,255,255), "good_vert")
-        save_dbg(viz, os.path.join(dbgdir, "08_fitted_lines_overlay.png"))
-
-    # --- compute intersections on good vertical ---
-    top_line = (top_vx, top_vy, top_x0, top_y0)
-    bottom_line = (bottom_vx, bottom_vy, bottom_x0, bottom_y0)
-    vert_line = (vert_vx, vert_vy, vert_x0, vert_y0)
-    # attempt to compute pt_v_top and pt_v_bot where possible
-    pt_v_top = None; pt_v_bot = None
-    try:
-        pt_v_top = np.array(intersect_lines(top_line, vert_line), dtype=np.float32)
-    except Exception:
-        pt_v_top = None
-    try:
-        pt_v_bot = np.array(intersect_lines(bottom_line, vert_line), dtype=np.float32)
-    except Exception:
-        pt_v_bot = None
-
-    # --- Decide which edges are reliable ---
-    top_ok = (top_in_count >= max(6, RANSAC_MIN_INLIERS//2)) and (pt_v_top is not None)
-    bottom_ok = (bottom_in_count >= max(6, RANSAC_MIN_INLIERS//2)) and (pt_v_bot is not None)
-    vert_ok = (vert_in_count >= max(6, RANSAC_MIN_INLIERS//2))
-
-    if DEBUG:
-        with open(os.path.join(dbgdir, "diagnostics.txt"), "a") as fh:
-            fh.write(f"top_inliers={top_in_count}, bottom_inliers={bottom_in_count}, vert_inliers={vert_in_count}\n")
-            fh.write(f"top_ok={top_ok}, bottom_ok={bottom_ok}, vert_ok={vert_ok}\n")
-
-    # --- Build orthogonal axes and corners ---
-    # Prefer to use top line if available; if top missing, use bottom + vertical to infer top by moving up expected_h
-    used_anchor = None
-    if vert_ok and top_ok:
-        # standard: use top intersection and vertical to define right/left anchors
-        used_anchor = "top"
-        anchor_top = pt_v_top
-        anchor_bot = pt_v_bot if bottom_ok else (pt_v_top + np.array([0.0, expected_h], dtype=np.float32))  # fallback
-    elif vert_ok and bottom_ok:
-        # top is missing: anchor on bottom intersection and move up
-        used_anchor = "bottom"
-        anchor_bot = pt_v_bot
-        # vertical unit pointing downwards
-        vvx, vvy = vert_vx, vert_vy
-        vnorm = math.hypot(vvx, vvy) + 1e-12
-        v_unit = np.array([vvx / vnorm, vvy / vnorm], dtype=np.float32)
-        # ensure pointing downward: dot with (0,1) > 0
-        if v_unit[1] < 0:
-            v_unit = -v_unit
-        # compute top anchor by moving up expected_h along vertical
-        anchor_top = anchor_bot - v_unit * float(expected_h)
-    else:
-        # not enough reliable edges; fall back to convex hull approx (let the perspective fallback handle)
-        used_anchor = "none"
-
-    # if we have an anchor and vertical available, construct orthonormal axes u (right) and p (down)
-    src_TL = src_TR = src_BL = src_BR = None
-    if used_anchor in ("top", "bottom") and vert_ok:
-        # vertical direction unit
-        vvx, vvy = vert_vx, vert_vy
-        vnorm = math.hypot(vvx, vvy) + 1e-12
-        v_unit = np.array([vvx / vnorm, vvy / vnorm], dtype=np.float32)
-        # make sure vertical points downwards
-        if v_unit[1] < 0:
-            v_unit = -v_unit
-        # horizontal unit is perpendicular to vertical
-        u_unit = np.array([-v_unit[1], v_unit[0]], dtype=np.float32)  # rightwards candidate
-        # ensure u_unit points right (positive x)
-        if u_unit[0] < 0:
-            u_unit = -u_unit
-
-        # anchor_top and anchor_bot are set above (top_ok or computed)
-        # anchored points lie on the *good* vertical edge: if bad_on_left==True then this vertical is RIGHT edge else LEFT edge
+        # --- fit lines robustly ---
+        top_vx, top_vy, top_x0, top_y0, top_inliers = fit_line_ransac(top_cand)
+        bottom_vx, bottom_vy, bottom_x0, bottom_y0, bottom_inliers = fit_line_ransac(bottom_cand)
         if bad_on_left:
-            # vertical is RIGHT edge: anchor_top is TR, anchor_bot is BR
-            src_TR = anchor_top
-            src_BR = anchor_bot
-            src_TL = src_TR - u_unit * float(expected_w)
-            src_BL = src_BR - u_unit * float(expected_w)
-            # ensure exact vertical height (recompute using p vector)
-            # p vector (down) is v_unit, so TL->BL = v_unit*expected_h
-            src_BL = src_TL + v_unit * float(expected_h)
-            src_BR = src_TR + v_unit * float(expected_h)
+            vert_vx, vert_vy, vert_x0, vert_y0, vert_inliers = fit_line_ransac(right_cand)
         else:
-            # vertical is LEFT edge: anchor_top is TL, anchor_bot is BL
-            src_TL = anchor_top
-            src_BL = anchor_bot
-            src_TR = src_TL + u_unit * float(expected_w)
-            src_BR = src_TR + v_unit * float(expected_h)
-            src_BL = src_TL + v_unit * float(expected_h)
+            vert_vx, vert_vy, vert_x0, vert_y0, vert_inliers = fit_line_ransac(left_cand)
+
     else:
-        # we don't have enough to build shear-free rectangle; fallback to earlier methods
-        src_tri = None
+        # without a9dc2b24e6b0d1d49b6fc232223d6431ba3442a5 bad: fix perspective transform for broken ADF scanners
+        # Invert if necessary, so the page is always "white" for thresholding
+        # We'll use Otsu's method to detect high-contrast area
+        _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    # --- If we built corners, make source/destination triangles and warp affine ---
-    warped = None; warped_mask = None
-    if src_TL is not None and src_TR is not None and src_BL is not None:
-        src_tri = np.vstack([src_TL, src_BL, src_TR]).astype(np.float32)  # TL, BL, TR
-        dst_tri = np.vstack([
-            np.array([0.0, 0.0], dtype=np.float32),
-            np.array([0.0, float(expected_h - 1)], dtype=np.float32),
-            np.array([float(expected_w - 1), 0.0], dtype=np.float32)
-        ]).astype(np.float32)
+        # Determine whether the page is darker or lighter than background
+        mean_val = cv2.mean(gray, mask=None)[0]
+        if mean_val < 127:  # dark page: invert mask
+            mask = cv2.bitwise_not(mask)
 
-        # validate source triangle
-        def tri_area(tri):
-            return abs(0.5 * (tri[0,0]*(tri[1,1]-tri[2,1]) + tri[1,0]*(tri[2,1]-tri[0,1]) + tri[2,0]*(tri[0,1]-tri[1,1])))
-        area = tri_area(src_tri)
+        # Morphology to remove small gaps
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5,5), np.uint8))
+
+        # Find contours
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            print(f"Warning: no contours found in {in_path}")
+            return
+        page_contour = max(contours, key=cv2.contourArea)
+
+        # Approximate contour to quadrilateral
+        epsilon = 0.02 * cv2.arcLength(page_contour, True)
+        approx = cv2.approxPolyDP(page_contour, epsilon, True)
+        if len(approx) != 4:
+            approx = cv2.convexHull(page_contour)
+            if len(approx) < 4:
+                print(f"Warning: not enough points for perspective in {in_path}")
+                return
+            # pick 4 extreme points
+            pts = np.array([
+                approx[approx[:,0,0].argmin()][0],  # leftmost
+                approx[approx[:,0,1].argmin()][0],  # topmost
+                approx[approx[:,0,0].argmax()][0],  # rightmost
+                approx[approx[:,0,1].argmax()][0]   # bottommost
+            ])
+        else:
+            pts = approx.reshape(4,2)
+
+        rect = order_points(pts)
+
+        # Perspective transform
+        widthA = np.linalg.norm(rect[2] - rect[3])
+        widthB = np.linalg.norm(rect[1] - rect[0])
+        maxWidth = max(int(widthA), int(widthB))
+        heightA = np.linalg.norm(rect[1] - rect[2])
+        heightB = np.linalg.norm(rect[0] - rect[3])
+        maxHeight = max(int(heightA), int(heightB))
+
+    if HANDLE_BROKEN_SCANNER:
+        # with a9dc2b24e6b0d1d49b6fc232223d6431ba3442a5 bad: fix perspective transform for broken ADF scanners
+
+        # counts for diagnostics
+        top_in_count = int(np.count_nonzero(top_inliers)) if isinstance(top_inliers, (list, np.ndarray)) else len(top_cand)
+        bottom_in_count = int(np.count_nonzero(bottom_inliers)) if isinstance(bottom_inliers, (list, np.ndarray)) else len(bottom_cand)
+        vert_in_count = int(np.count_nonzero(vert_inliers)) if isinstance(vert_inliers, (list, np.ndarray)) else len(right_cand if bad_on_left else left_cand)
+
+        if DEBUG:
+            viz = img.copy()
+            cv2.drawContours(viz, [page_contour], -1, (0,255,0), 2)
+            def draw_line(vx,vy,x0,y0,color,label):
+                norm = math.hypot(vx,vy)
+                if norm < 1e-6: return
+                ux, uy = vx/norm, vy/norm
+                L = max(W_img, H_img) * 2
+                p1 = (int(x0 - ux*L), int(y0 - uy*L))
+                p2 = (int(x0 + ux*L), int(y0 + uy*L))
+                cv2.line(viz, p1, p2, color, 2)
+                cv2.putText(viz, f"{label}:{(top_in_count if label=='top' else bottom_in_count if label=='bottom' else vert_in_count)}",
+                            (int(x0), int(y0)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            draw_line(top_vx, top_vy, top_x0, top_y0, (255,0,0), "top")
+            draw_line(bottom_vx, bottom_vy, bottom_x0, bottom_y0, (0,0,255), "bottom")
+            draw_line(vert_vx, vert_vy, vert_x0, vert_y0, (0,255,255), "good_vert")
+            save_dbg(viz, os.path.join(dbgdir, "08_fitted_lines_overlay.png"))
+
+        # --- compute intersections on good vertical ---
+        top_line = (top_vx, top_vy, top_x0, top_y0)
+        bottom_line = (bottom_vx, bottom_vy, bottom_x0, bottom_y0)
+        vert_line = (vert_vx, vert_vy, vert_x0, vert_y0)
+        # attempt to compute pt_v_top and pt_v_bot where possible
+        pt_v_top = None; pt_v_bot = None
+        try:
+            pt_v_top = np.array(intersect_lines(top_line, vert_line), dtype=np.float32)
+        except Exception:
+            pt_v_top = None
+        try:
+            pt_v_bot = np.array(intersect_lines(bottom_line, vert_line), dtype=np.float32)
+        except Exception:
+            pt_v_bot = None
+
+        # --- Decide which edges are reliable ---
+        top_ok = (top_in_count >= max(6, RANSAC_MIN_INLIERS//2)) and (pt_v_top is not None)
+        bottom_ok = (bottom_in_count >= max(6, RANSAC_MIN_INLIERS//2)) and (pt_v_bot is not None)
+        vert_ok = (vert_in_count >= max(6, RANSAC_MIN_INLIERS//2))
+
         if DEBUG:
             with open(os.path.join(dbgdir, "diagnostics.txt"), "a") as fh:
-                fh.write(f"src_tri_area={area:.3f}\n")
-        if area > 1.0 and np.isfinite(src_tri).all():
-            try:
-                M_aff = cv2.getAffineTransform(src_tri, dst_tri)
-                warped = cv2.warpAffine(img, M_aff, (expected_w, expected_h), flags=cv2.INTER_LINEAR, borderValue=(255,255,255))
-                warped_mask = cv2.warpAffine(filled_page_mask, M_aff, (expected_w, expected_h), flags=cv2.INTER_NEAREST, borderValue=0)
-                if DEBUG:
-                    # draw axes and corners overlay
-                    vis = img.copy()
-                    def draw_pt(pt, color, tag):
-                        cv2.circle(vis, (int(pt[0]), int(pt[1])), 6, color, -1)
-                        cv2.putText(vis, tag, (int(pt[0]+6), int(pt[1]-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                    draw_pt(src_TL, (0,255,0), "TL")
-                    draw_pt(src_TR, (0,128,255), "TR")
-                    draw_pt(src_BL, (255,0,0), "BL")
-                    draw_pt(src_BR, (255,255,0), "BR")
-                    save_dbg(vis, os.path.join(dbgdir, "debug_axes_and_corners.png"))
-                    save_dbg(warped, os.path.join(dbgdir, "09_warped_affine.png"))
-                    save_dbg(warped_mask, os.path.join(dbgdir, "10_warped_mask_affine.png"))
-            except Exception as e:
-                if DEBUG:
-                    with open(os.path.join(dbgdir, "diagnostics.txt"), "a") as fh:
-                        fh.write(f"affine warp exception: {e}\n")
-                warped = None; warped_mask = None
+                fh.write(f"top_inliers={top_in_count}, bottom_inliers={bottom_in_count}, vert_inliers={vert_in_count}\n")
+                fh.write(f"top_ok={top_ok}, bottom_ok={bottom_ok}, vert_ok={vert_ok}\n")
+
+        # --- Build orthogonal axes and corners ---
+        # Prefer to use top line if available; if top missing, use bottom + vertical to infer top by moving up expected_h
+        used_anchor = None
+        if vert_ok and top_ok:
+            # standard: use top intersection and vertical to define right/left anchors
+            used_anchor = "top"
+            anchor_top = pt_v_top
+            anchor_bot = pt_v_bot if bottom_ok else (pt_v_top + np.array([0.0, expected_h], dtype=np.float32))  # fallback
+        elif vert_ok and bottom_ok:
+            # top is missing: anchor on bottom intersection and move up
+            used_anchor = "bottom"
+            anchor_bot = pt_v_bot
+            # vertical unit pointing downwards
+            vvx, vvy = vert_vx, vert_vy
+            vnorm = math.hypot(vvx, vvy) + 1e-12
+            v_unit = np.array([vvx / vnorm, vvy / vnorm], dtype=np.float32)
+            # ensure pointing downward: dot with (0,1) > 0
+            if v_unit[1] < 0:
+                v_unit = -v_unit
+            # compute top anchor by moving up expected_h along vertical
+            anchor_top = anchor_bot - v_unit * float(expected_h)
         else:
+            # not enough reliable edges; fall back to convex hull approx (let the perspective fallback handle)
+            used_anchor = "none"
+
+        # if we have an anchor and vertical available, construct orthonormal axes u (right) and p (down)
+        src_TL = src_TR = src_BL = src_BR = None
+        if used_anchor in ("top", "bottom") and vert_ok:
+            # vertical direction unit
+            vvx, vvy = vert_vx, vert_vy
+            vnorm = math.hypot(vvx, vvy) + 1e-12
+            v_unit = np.array([vvx / vnorm, vvy / vnorm], dtype=np.float32)
+            # make sure vertical points downwards
+            if v_unit[1] < 0:
+                v_unit = -v_unit
+            # horizontal unit is perpendicular to vertical
+            u_unit = np.array([-v_unit[1], v_unit[0]], dtype=np.float32)  # rightwards candidate
+            # ensure u_unit points right (positive x)
+            if u_unit[0] < 0:
+                u_unit = -u_unit
+
+            # anchor_top and anchor_bot are set above (top_ok or computed)
+            # anchored points lie on the *good* vertical edge: if bad_on_left==True then this vertical is RIGHT edge else LEFT edge
+            if bad_on_left:
+                # vertical is RIGHT edge: anchor_top is TR, anchor_bot is BR
+                src_TR = anchor_top
+                src_BR = anchor_bot
+                src_TL = src_TR - u_unit * float(expected_w)
+                src_BL = src_BR - u_unit * float(expected_w)
+                # ensure exact vertical height (recompute using p vector)
+                # p vector (down) is v_unit, so TL->BL = v_unit*expected_h
+                src_BL = src_TL + v_unit * float(expected_h)
+                src_BR = src_TR + v_unit * float(expected_h)
+            else:
+                # vertical is LEFT edge: anchor_top is TL, anchor_bot is BL
+                src_TL = anchor_top
+                src_BL = anchor_bot
+                src_TR = src_TL + u_unit * float(expected_w)
+                src_BR = src_TR + v_unit * float(expected_h)
+                src_BL = src_TL + v_unit * float(expected_h)
+        # else:
+        #     # we don't have enough to build shear-free rectangle; fallback to earlier methods
+        #     src_tri = None
+
+        # TODO restore something like this...?
+        r'''
+        # Function to compute average color along a strip
+        def avg_color_strip(img, axis, start, end, strip_width=1):
+            if axis == 'top':
+                strip = img[start:end, :, :]
+            elif axis == 'bottom':
+                strip = img[h-end:h-start, :, :]
+            elif axis == 'left':
+                strip = img[:, start:end, :]
+            elif axis == 'right':
+                strip = img[:, w-end:w-start, :]
+            else:
+                raise ValueError("Invalid axis")
+            return np.mean(strip, axis=(0,1)).astype(np.uint8)
+        '''
+
+    else:
+        # without a9dc2b24e6b0d1d49b6fc232223d6431ba3442a5 bad: fix perspective transform for broken ADF scanners
+
+        dst = np.array([
+            [0, 0],
+            [maxWidth - 1, 0],
+            [maxWidth - 1, maxHeight - 1],
+            [0, maxHeight - 1]
+        ], dtype="float32")
+
+        M = cv2.getPerspectiveTransform(rect, dst)
+        warped = cv2.warpPerspective(img, M, (maxWidth, maxHeight))
+
+        # # Add internal white border
+        # h, w = warped.shape[:2]
+        # canvas = np.ones_like(warped) * 255
+        # b = BORDER_SIZE
+        # canvas[b:h-b, b:w-b] = warped[b:h-b, b:w-b]
+
+        h, w = warped.shape[:2]
+        b = BORDER_SIZE
+
+        # Prepare a canvas with the same content as warped
+        canvas = warped.copy()
+
+        # Function to compute average color along a strip
+        def avg_color_strip(img, axis, start, end, strip_width=1):
+            if axis == 'top':
+                strip = img[start:end, :, :]
+            elif axis == 'bottom':
+                strip = img[h-end:h-start, :, :]
+            elif axis == 'left':
+                strip = img[:, start:end, :]
+            elif axis == 'right':
+                strip = img[:, w-end:w-start, :]
+            else:
+                raise ValueError("Invalid axis")
+            return np.mean(strip, axis=(0,1)).astype(np.uint8)
+
+        # Fill borders with local average color
+        canvas[0:b, :, :] = avg_color_strip(canvas, 'top', 50, 100)       # top border
+        canvas[h-b:h, :, :] = avg_color_strip(canvas, 'bottom', 50, 100)  # bottom border
+        canvas[:, 0:b, :] = avg_color_strip(canvas, 'left', 50, 100)      # left border
+        canvas[:, w-b:w, :] = avg_color_strip(canvas, 'right', 50, 100)   # right border
+
+    if HANDLE_BROKEN_SCANNER:
+        # with a9dc2b24e6b0d1d49b6fc232223d6431ba3442a5 bad: fix perspective transform for broken ADF scanners
+        # --- If we built corners, make source/destination triangles and warp affine ---
+        warped = None; warped_mask = None
+        if src_TL is not None and src_TR is not None and src_BL is not None:
+            src_tri = np.vstack([src_TL, src_BL, src_TR]).astype(np.float32)  # TL, BL, TR
+            dst_tri = np.vstack([
+                np.array([0.0, 0.0], dtype=np.float32),
+                np.array([0.0, float(expected_h - 1)], dtype=np.float32),
+                np.array([float(expected_w - 1), 0.0], dtype=np.float32)
+            ]).astype(np.float32)
+
+            # validate source triangle
+            def tri_area(tri):
+                return abs(0.5 * (tri[0,0]*(tri[1,1]-tri[2,1]) + tri[1,0]*(tri[2,1]-tri[0,1]) + tri[2,0]*(tri[0,1]-tri[1,1])))
+            area = tri_area(src_tri)
             if DEBUG:
                 with open(os.path.join(dbgdir, "diagnostics.txt"), "a") as fh:
-                    fh.write(f"src_tri invalid area={area}\n")
-            warped = None; warped_mask = None
-
-    # --- If affine failed or wasn't built, do perspective fallback as before ---
-    def warped_ok(wimg, wmask):
-        if wimg is None or wmask is None:
-            return False, "none"
-        nonwhite = np.count_nonzero(np.any(wimg != 255, axis=2))
-        nonwhite_ratio = nonwhite / float(expected_w * expected_h)
-        mask_count = int(np.count_nonzero(wmask))
-        mask_ratio = mask_count / float(expected_w * expected_h)
-        if DEBUG:
-            with open(os.path.join(dbgdir, "diagnostics.txt"), "a") as fh:
-                fh.write(f"nonwhite_ratio={nonwhite_ratio:.4f}, mask_ratio={mask_ratio:.4f}\n")
-        if nonwhite_ratio < 0.02 or mask_ratio < 0.005:
-            return False, f"low_content({nonwhite_ratio:.3f}, mask={mask_ratio:.3f})"
-        return True, "ok"
-
-    ok, why = warped_ok(warped, warped_mask)
-    if not ok:
-        # perspective fallback using approx polygon (same as earlier code)
-        hull = cv2.convexHull(page_contour)
-        peri = cv2.arcLength(hull, True)
-        approx = cv2.approxPolyDP(hull, 0.02 * peri, True)
-        if len(approx) >= 4:
-            pts = approx.reshape(-1,2).astype(np.float32)
-            tl = pts[np.argmin(pts[:,0] + pts[:,1])]
-            br = pts[np.argmax(pts[:,0] + pts[:,1])]
-            tr = pts[np.argmin(pts[:,1] - pts[:,0])]
-            bl = pts[np.argmax(pts[:,1] - pts[:,0])]
-            src_quad = np.vstack([tl, tr, br, bl]).astype(np.float32)
-            dst_quad = np.array([[0,0], [expected_w-1,0], [expected_w-1,expected_h-1], [0,expected_h-1]], dtype=np.float32)
-            try:
-                M_p = cv2.getPerspectiveTransform(src_quad, dst_quad)
-                warped_p = cv2.warpPerspective(img, M_p, (expected_w, expected_h), flags=cv2.INTER_LINEAR, borderValue=(255,255,255))
-                warped_mask_p = cv2.warpPerspective(filled_page_mask, M_p, (expected_w, expected_h), flags=cv2.INTER_NEAREST, borderValue=0)
-                ok2, why2 = warped_ok(warped_p, warped_mask_p)
-                if ok2:
-                    warped = warped_p; warped_mask = warped_mask_p
+                    fh.write(f"src_tri_area={area:.3f}\n")
+            if area > 1.0 and np.isfinite(src_tri).all():
+                try:
+                    M_aff = cv2.getAffineTransform(src_tri, dst_tri)
+                    warped = cv2.warpAffine(img, M_aff, (expected_w, expected_h), flags=cv2.INTER_LINEAR, borderValue=(255,255,255))
+                    warped_mask = cv2.warpAffine(filled_page_mask, M_aff, (expected_w, expected_h), flags=cv2.INTER_NEAREST, borderValue=0)
                     if DEBUG:
-                        save_dbg(warped, os.path.join(dbgdir, "09_warped_perspective.png"))
-                        save_dbg(warped_mask, os.path.join(dbgdir, "10_warped_mask_persp.png"))
-                else:
+                        # draw axes and corners overlay
+                        vis = img.copy()
+                        def draw_pt(pt, color, tag):
+                            cv2.circle(vis, (int(pt[0]), int(pt[1])), 6, color, -1)
+                            cv2.putText(vis, tag, (int(pt[0]+6), int(pt[1]-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                        draw_pt(src_TL, (0,255,0), "TL")
+                        draw_pt(src_TR, (0,128,255), "TR")
+                        draw_pt(src_BL, (255,0,0), "BL")
+                        draw_pt(src_BR, (255,255,0), "BR")
+                        save_dbg(vis, os.path.join(dbgdir, "debug_axes_and_corners.png"))
+                        save_dbg(warped, os.path.join(dbgdir, "09_warped_affine.png"))
+                        save_dbg(warped_mask, os.path.join(dbgdir, "10_warped_mask_affine.png"))
+                except Exception as e:
                     if DEBUG:
                         with open(os.path.join(dbgdir, "diagnostics.txt"), "a") as fh:
-                            fh.write(f"perspective fallback bad: {why2}\n")
-            except Exception as e:
+                            fh.write(f"affine warp exception: {e}\n")
+                    warped = None; warped_mask = None
+            else:
                 if DEBUG:
                     with open(os.path.join(dbgdir, "diagnostics.txt"), "a") as fh:
-                        fh.write(f"perspective fallback error: {e}\n")
-
-    # final fallback: bounding box crop+resize
-    ok_final, why_final = warped_ok(warped, warped_mask)
-    if not ok_final:
-        if DEBUG:
-            with open(os.path.join(dbgdir, "diagnostics.txt"), "a") as fh:
-                fh.write("Falling back to bbox crop+resize\n")
-        x,y,ww,hh = cv2.boundingRect(page_contour)
-        crop = img[max(0,y-2):min(H_img,y+hh+2), max(0,x-2):min(W_img,x+ww+2)]
-        if crop.size == 0:
-            print(f"[{page_num}] bbox crop empty; skipping.")
-            return
-        warped = cv2.resize(crop, (expected_w, expected_h), interpolation=cv2.INTER_LINEAR)
-        warped_mask = cv2.resize(filled_page_mask[y:y+hh, x:x+ww], (expected_w, expected_h), interpolation=cv2.INTER_NEAREST)
-        if DEBUG:
-            save_dbg(warped, os.path.join(dbgdir, "09_warped_bbox_resized.png"))
-            save_dbg(warped_mask, os.path.join(dbgdir, "10_warped_mask_bbox.png"))
-
-    # shrink the page mask by a few pixels to also cover the old edge artifact
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (BAD_EDGE_CLEANUP_FILL_PX, BAD_EDGE_CLEANUP_FILL_PX))
-    eroded_mask = cv2.erode(warped_mask, kernel, iterations=1)
-
-    if DEBUG:
-        diff = cv2.subtract(warped_mask, eroded_mask)
-        save_dbg(diff, os.path.join(dbgdir, "10b_eroded_diff.png"))
-
-    # --- finalize: fill outside filled mask with white (preserve letter holes) ---
-    canvas = warped.copy()
-    empty = (eroded_mask == 0)
-    if np.any(empty):
-        # fill white
-        if input_is_grayscale:
-            canvas[empty] = 255
+                        fh.write(f"src_tri invalid area={area}\n")
+                warped = None; warped_mask = None
         else:
-            canvas[empty] = (255, 255, 255)
+            # we don't have enough to build shear-free rectangle; fallback to earlier methods
+            src_tri = None
+
+        # --- If affine failed or wasn't built, do perspective fallback as before ---
+        def warped_ok(wimg, wmask):
+            if wimg is None or wmask is None:
+                return False, "none"
+            nonwhite = np.count_nonzero(np.any(wimg != 255, axis=2))
+            nonwhite_ratio = nonwhite / float(expected_w * expected_h)
+            mask_count = int(np.count_nonzero(wmask))
+            mask_ratio = mask_count / float(expected_w * expected_h)
+            if DEBUG:
+                with open(os.path.join(dbgdir, "diagnostics.txt"), "a") as fh:
+                    fh.write(f"nonwhite_ratio={nonwhite_ratio:.4f}, mask_ratio={mask_ratio:.4f}\n")
+            if nonwhite_ratio < 0.02 or mask_ratio < 0.005:
+                return False, f"low_content({nonwhite_ratio:.3f}, mask={mask_ratio:.3f})"
+            return True, "ok"
+
+        ok, why = warped_ok(warped, warped_mask)
+        if not ok:
+            # perspective fallback using approx polygon (same as earlier code)
+            hull = cv2.convexHull(page_contour)
+            peri = cv2.arcLength(hull, True)
+            approx = cv2.approxPolyDP(hull, 0.02 * peri, True)
+            if len(approx) >= 4:
+                pts = approx.reshape(-1,2).astype(np.float32)
+                tl = pts[np.argmin(pts[:,0] + pts[:,1])]
+                br = pts[np.argmax(pts[:,0] + pts[:,1])]
+                tr = pts[np.argmin(pts[:,1] - pts[:,0])]
+                bl = pts[np.argmax(pts[:,1] - pts[:,0])]
+                src_quad = np.vstack([tl, tr, br, bl]).astype(np.float32)
+                dst_quad = np.array([[0,0], [expected_w-1,0], [expected_w-1,expected_h-1], [0,expected_h-1]], dtype=np.float32)
+                try:
+                    M_p = cv2.getPerspectiveTransform(src_quad, dst_quad)
+                    warped_p = cv2.warpPerspective(img, M_p, (expected_w, expected_h), flags=cv2.INTER_LINEAR, borderValue=(255,255,255))
+                    warped_mask_p = cv2.warpPerspective(filled_page_mask, M_p, (expected_w, expected_h), flags=cv2.INTER_NEAREST, borderValue=0)
+                    ok2, why2 = warped_ok(warped_p, warped_mask_p)
+                    if ok2:
+                        warped = warped_p; warped_mask = warped_mask_p
+                        if DEBUG:
+                            save_dbg(warped, os.path.join(dbgdir, "09_warped_perspective.png"))
+                            save_dbg(warped_mask, os.path.join(dbgdir, "10_warped_mask_persp.png"))
+                    else:
+                        if DEBUG:
+                            with open(os.path.join(dbgdir, "diagnostics.txt"), "a") as fh:
+                                fh.write(f"perspective fallback bad: {why2}\n")
+                except Exception as e:
+                    if DEBUG:
+                        with open(os.path.join(dbgdir, "diagnostics.txt"), "a") as fh:
+                            fh.write(f"perspective fallback error: {e}\n")
+
+        # final fallback: bounding box crop+resize
+        ok_final, why_final = warped_ok(warped, warped_mask)
+        if not ok_final:
+            if DEBUG:
+                with open(os.path.join(dbgdir, "diagnostics.txt"), "a") as fh:
+                    fh.write("Falling back to bbox crop+resize\n")
+            x,y,ww,hh = cv2.boundingRect(page_contour)
+            crop = img[max(0,y-2):min(H_img,y+hh+2), max(0,x-2):min(W_img,x+ww+2)]
+            if crop.size == 0:
+                print(f"[{page_num}] bbox crop empty; skipping.")
+                return
+            warped = cv2.resize(crop, (expected_w, expected_h), interpolation=cv2.INTER_LINEAR)
+            warped_mask = cv2.resize(filled_page_mask[y:y+hh, x:x+ww], (expected_w, expected_h), interpolation=cv2.INTER_NEAREST)
+            if DEBUG:
+                save_dbg(warped, os.path.join(dbgdir, "09_warped_bbox_resized.png"))
+                save_dbg(warped_mask, os.path.join(dbgdir, "10_warped_mask_bbox.png"))
+
+        # shrink the page mask by a few pixels to also cover the old edge artifact
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (BAD_EDGE_CLEANUP_FILL_PX, BAD_EDGE_CLEANUP_FILL_PX))
+        eroded_mask = cv2.erode(warped_mask, kernel, iterations=1)
+
+        if DEBUG:
+            diff = cv2.subtract(warped_mask, eroded_mask)
+            save_dbg(diff, os.path.join(dbgdir, "10b_eroded_diff.png"))
+
+        # --- finalize: fill outside filled mask with white (preserve letter holes) ---
+        canvas = warped.copy()
+        empty = (eroded_mask == 0)
+        if np.any(empty):
+            # fill white
+            if input_is_grayscale:
+                canvas[empty] = 255
+            else:
+                canvas[empty] = (255, 255, 255)
 
     if input_is_grayscale:
         canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
@@ -672,11 +811,12 @@ def process_image(in_path, out_path):
     cv2.imwrite(out_path, canvas)
     print(f"writing {out_path}")
 
-    if DEBUG:
-        save_dbg(canvas, os.path.join(dbgdir, "11_final_output.png"))
-        overlay = warped.copy()
-        overlay[warped_mask==0] = (0,0,255)
-        save_dbg(overlay, os.path.join(dbgdir, "12_missing_overlay.png"))
+    if HANDLE_BROKEN_SCANNER:
+        if DEBUG:
+            save_dbg(canvas, os.path.join(dbgdir, "11_final_output.png"))
+            overlay = warped.copy()
+            overlay[warped_mask==0] = (0,0,255)
+            save_dbg(overlay, os.path.join(dbgdir, "12_missing_overlay.png"))
 
 def main():
     ensure_dir(OUTPUT_DIR)
@@ -702,6 +842,7 @@ def main():
             process_image(in_path, out_path)
         except Exception as exc:
             print(f"Error processing {fname}: {exc}")
+            raise
 
 if __name__ == "__main__":
     main()
