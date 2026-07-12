@@ -193,8 +193,17 @@ def process_image(args):
 files = [
     f
     for f in sorted(src.glob(f"*.{scan_format}"))
-    if re.fullmatch(rf"\d+\.{re.escape(scan_format)}", f.name)
+    # if re.fullmatch(rf"\d+\.{re.escape(scan_format)}", f.name)
+    if f.name.endswith(f".{scan_format}")
 ]
+
+def filter_file(f_src):
+    base_dst = f_src.with_suffix(f".{image_format}").name
+    f_dst = dst / base_dst
+    # print(f"filter_file: f_src={f_src} f_dst={f_dst}")
+    return not f_dst.exists()
+
+files = list(filter(filter_file, files))
 
 tasks = [
     (
