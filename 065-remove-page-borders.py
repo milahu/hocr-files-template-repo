@@ -5,7 +5,6 @@ Key fix: create a FILLED page mask (no inner holes) from the page contour and us
 for filling after warping. The original image pixels are preserved and warped directly.
 """
 
-CONFIG_FILE = "030-measure-page-size.txt"
 INPUT_DIR = "060-rotate-crop"
 OUTPUT_DIR = "065-remove-page-borders"
 
@@ -33,36 +32,19 @@ import random
 import numpy as np
 import cv2
 
-def read_page_size_from_config(config_path):
-    """
-    Parse scan_x and scan_y from a bash-style config file.
-    Only integer assignments are considered; ignores comments and dynamic expressions.
-    Returns (W_mm, H_mm)
-    """
-    W_mm = H_mm = None
-    with open(config_path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            # match lines like: scan_x=120
-            m = re.match(r'^scan_x\s*=\s*(\d+)', line)
-            if m:
-                W_mm = int(m.group(1))
-            m = re.match(r'^scan_y\s*=\s*(\d+)', line)
-            if m:
-                H_mm = int(m.group(1))
-            if W_mm is not None and H_mm is not None:
-                break
-    if W_mm is None or H_mm is None:
-        raise ValueError(f"scan_x or scan_y not found in {config_path}")
-    return W_mm, H_mm
+from _shared import (
+    load_config,
+    get_page_num,
+)
 
-# W_mm = 120
-# H_mm = 190
-# ASPECT = W_mm / H_mm
-W_mm, H_mm = read_page_size_from_config(CONFIG_FILE)
-ASPECT = W_mm / H_mm
+config = load_config()
+
+scan_x = config.scan_x
+scan_y = config.scan_y
+
+config.scan_aspect = scan_x / scan_y
+
+ASPECT = config.scan_aspect
 
 def ensure_dir(p):
     os.makedirs(p, exist_ok=True)
