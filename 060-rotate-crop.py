@@ -12,6 +12,11 @@ import cv2
 import psutil
 import numpy as np
 
+from _shared import (
+    load_config,
+    get_page_num,
+)
+
 
 # --- Setup -------------------------------------------------------------------
 os.chdir(Path(__file__).resolve().parent)
@@ -21,11 +26,7 @@ dst.mkdir(parents=True, exist_ok=True)
 
 
 # --- Settings ----------------------------------------------------------------
-config_path = Path("050-rotate-crop-config.py")
-
-spec = importlib.util.spec_from_file_location("rotate_crop_config", config_path)
-config = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(config)
+config = load_config()
 
 
 # --- Worker ------------------------------------------------------------------
