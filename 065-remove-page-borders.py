@@ -397,59 +397,83 @@ def px_of_mm(mm, dpi):
     return mm * dpi / 25.4
 
 
-def detect_top_points(mask):
+EDGE_TOP = 0
+EDGE_BOTTOM = 1
+EDGE_LEFT = 2
+EDGE_RIGHT = 3
+
+
+def detect_edge_points(gray, mask, edge, margin):
     h, w = mask.shape
     pts = []
-    for x in range(w):
-        col = mask[:, x]
-        ys = np.where(col == 255)[0]
-        if len(ys) == 0:
-            continue
-        y = ys[0]
-        pts.append((x, y))
+
+    if edge == EDGE_TOP:
+        y_max = min(margin, h)
+        for x in range(w):
+            ys = np.where(mask[:y_max, x] == 255)[0]
+            if len(ys):
+                pts.append((x, ys[0]))
+
+        # Transition verification
+        #
+        # The first white pixel isn't always the page.
+        # It might be dust, glare, or text sticking out.
+        #
+        # Keep only points that actually separate gray background
+        # from the white page.
+        pts = verify_horizontal(
+            gray,
+            # pts,
+            np.asarray(pts, np.float32),
+            top_edge=True
+        )
+
+    elif edge == EDGE_BOTTOM:
+        y_min = max(0, h - margin)
+        for x in range(w):
+            ys = np.where(mask[y_min:, x] == 255)[0]
+            if len(ys):
+                pts.append((x, y_min + ys[-1]))
+
+        # Transition verification
+        pts = verify_horizontal(
+            gray,
+            # pts,
+            np.asarray(pts, np.float32),
+            top_edge=False
+        )
+
+    elif edge == EDGE_LEFT:
+        x_max = min(margin, w)
+        for y in range(h):
+            xs = np.where(mask[y, :x_max] == 255)[0]
+            if len(xs):
+                pts.append((xs[0], y))
+
+        # Transition verification
+        pts = verify_vertical(
+            gray,
+            # pts,
+            np.asarray(pts, np.float32),
+            right_edge=False
+        )
+
+    elif edge == EDGE_RIGHT:
+        x_min = max(0, w - margin)
+        for y in range(h):
+            xs = np.where(mask[y, x_min:] == 255)[0]
+            if len(xs):
+                pts.append((x_min + xs[-1], y))
+
+        # Transition verification
+        pts = verify_vertical(
+            gray,
+            # pts,
+            np.asarray(pts, np.float32),
+            right_edge=True
+        )
+
     return np.asarray(pts, np.float32)
-
-
-def detect_bottom_points(mask):
-    h, w = mask.shape
-    pts = []
-    for x in range(w):
-        col = mask[:, x]
-        ys = np.where(col == 255)[0]
-        if len(ys) == 0:
-            continue
-        y = ys[-1]
-        pts.append((x, y))
-    return np.asarray(pts, np.float32)
-
-
-def detect_left_points(mask):
-    h, w = mask.shape
-    pts = []
-    for y in range(h):
-        row = mask[y]
-        xs = np.where(row == 255)[0]
-        if len(xs) == 0:
-            continue
-        pts.append((xs[0], y))
-    return np.asarray(pts, np.float32)
-
-
-def detect_right_points(mask):
-    h, w = mask.shape
-    pts = []
-    for y in range(h):
-        row = mask[y]
-        xs = np.where(row == 255)[0]
-        if len(xs) == 0:
-            continue
-        pts.append((xs[-1], y))
-    return np.asarray(pts, np.float32)
-
-
-def detect_edge_points(mask, direction):
-    pass
-    # TODO refactor detect_top_points etc
 
 
 # def is_vertical_transition(gray, x, y):
@@ -686,6 +710,60 @@ def process_image(in_path, out_path):
 
 
 
+    # Compute the expected ranges of margins
+    # NOTE the scanner removes the "scan top" margin
+    # so in the X direction, we have only one margin
+    # so here we divide by 4, not by 2
+    margin_range_x_mm = (
+        config.rotated_margined_scan_x -
+        config.rotated_scan_x
+    ) / 4.0
+    margin_range_y_mm = (
+        config.rotated_margined_scan_y -
+        config.rotated_scan_y
+    ) / 2.0
+
+    if DEBUG:
+        print(f"config.rotated_margined_scan: ({config.rotated_margined_scan_x}, {config.rotated_margined_scan_y}) mm")
+        print(f"config.rotated_scan: ({config.rotated_scan_x}, {config.rotated_scan_y}) mm")
+        print(f"margin_range: ({margin_range_x_mm}, {margin_range_y_mm}) mm")
+
+    # Convert them to pixels
+    margin_range_x_px = px_of_mm(
+        margin_range_x_mm,
+        config.scan_resolution
+    )
+    margin_range_y_px = px_of_mm(
+        margin_range_y_mm,
+        config.scan_resolution
+    )
+
+    # TODO rename, move to config
+
+    SEARCH_MARGIN_FACTOR = 2.0
+    SEARCH_MARGIN_ADD_MM = 5
+
+    SEARCH_MARGIN_FACTOR = 1.2
+    SEARCH_MARGIN_ADD_MM = 2
+
+    # SEARCH_MARGIN_FACTOR = 1; SEARCH_MARGIN_ADD_MM = 0
+
+    # Then enlarge them
+    margin_range_x_px *= SEARCH_MARGIN_FACTOR
+    margin_range_y_px *= SEARCH_MARGIN_FACTOR
+    search_margin_add_px = px_of_mm(
+        SEARCH_MARGIN_ADD_MM,
+        config.scan_resolution
+    )
+    margin_range_x_px += search_margin_add_px
+    margin_range_y_px += search_margin_add_px
+
+    # we need integers for array indices
+    margin_range_x_px = int(math.ceil(margin_range_x_px))
+    margin_range_y_px = int(math.ceil(margin_range_y_px))
+
+
+
     # Step 1: Segment page vs. gray background
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -717,41 +795,35 @@ def process_image(in_path, out_path):
 
 
     # Step 2: Scan for transitions
+    # Step 3: Transition verification
 
     if bad_on_left:
-        outside_pts = detect_right_points(mask)
+        outside_pts = detect_edge_points(
+            gray,
+            mask,
+            EDGE_RIGHT,
+            margin_range_x_px,
+        )
     else:
-        outside_pts = detect_left_points(mask)
+        outside_pts = detect_edge_points(
+            gray,
+            mask,
+            EDGE_LEFT,
+            margin_range_x_px,
+        )
 
-    top_pts = detect_top_points(mask)
-    bottom_pts = detect_bottom_points(mask)
-
-
-
-    # Step 3: Transition verification
-    #
-    # The first white pixel isn't always the page.
-    # It might be dust, glare, or text sticking out.
-    #
-    # Keep only points that actually separate gray background
-    # from the white page.
-
-    top_pts = verify_horizontal(
+    top_pts = detect_edge_points(
         gray,
-        top_pts,
-        top_edge=True
+        mask,
+        EDGE_TOP,
+        margin_range_y_px,
     )
 
-    bottom_pts = verify_horizontal(
+    bottom_pts = detect_edge_points(
         gray,
-        bottom_pts,
-        top_edge=False
-    )
-
-    outside_pts = verify_vertical(
-        gray,
-        outside_pts,
-        right_edge=bad_on_left
+        mask,
+        EDGE_BOTTOM,
+        margin_range_y_px,
     )
 
 
@@ -1350,6 +1422,27 @@ def process_image(in_path, out_path):
 
             if DEBUG:
                 vis = rotated.copy()
+                # margin range: green
+                if bad_on_left:
+                    # outside edge is right
+                    # no line on the left
+                    pts = np.array([
+                        [0, margin_range_y_px], # top left
+                        [W_img - margin_range_x_px, margin_range_y_px], # top right
+                        [W_img - margin_range_x_px, H_img - margin_range_y_px], # bottom right
+                        [0, H_img - margin_range_y_px], # bottom left
+                    ], np.int32)
+                else:
+                    # outside edge is left
+                    # no line on the right
+                    pts = np.array([
+                        [W_img, margin_range_y_px], # top right
+                        [margin_range_x_px, margin_range_y_px], # top left
+                        [margin_range_x_px, H_img - margin_range_y_px], # bottom left
+                        [W_img, H_img - margin_range_y_px], # bottom right
+                    ], np.int32)
+                cv2.polylines(vis, [pts], False, (0,255,0), 3) # (0,255,0) == green?
+                # page margin: red
                 pts = np.array([
                     [x0_top, outside_top[1]],
                     [x1_top, outside_top[1]],
