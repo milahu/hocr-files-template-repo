@@ -9,18 +9,10 @@ import sys
 import time
 from pathlib import Path
 
-
-config_path = Path("030-measure-page-size.py")
-
-
-def load_config():
-    spec = importlib.util.spec_from_file_location("config", config_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Failed to load {config_path}")
-
-    config = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(config)
-    return config
+from _shared import (
+    load_config,
+    get_page_num,
+)
 
 
 def main():
@@ -77,8 +69,8 @@ def main():
         "--SkipBlankPage=no",
         "--AutoDocumentSize=no",
         "--AutoDeskew=no",
-        "-x", str(config.scan_x),
-        "-y", str(config.scan_y),
+        "-x", str(config.margined_scan_x),
+        "-y", str(config.margined_scan_y),
         f"--batch={dst / (page_num_fmt + '.' + config.scan_format)}",
         "--progress",
         "--batch-print",
