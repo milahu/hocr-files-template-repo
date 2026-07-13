@@ -43,37 +43,6 @@ config = load_config()
 # config.scan_aspect = scan_x / scan_y
 # ASPECT = config.scan_aspect
 
-# TODO move to load_config
-# book binding side = scanner top side
-config.use_three_edge_deskew = (
-    config.do_rotate
-    and config.rotate_odd == 270
-    and config.rotate_even == 90
-)
-
-print(f"config.use_three_edge_deskew: {config.use_three_edge_deskew}")
-
-# TODO move to load_config
-def get_rotated_scan_x_y(config):
-    # scanned image size after 060-rotate-crop.py
-    # NOTE dont apply crop
-    x = config.scan_x
-    y = config.scan_y
-
-    if config.use_three_edge_deskew:
-        # rotate by 90 or 270 degrees
-        x, y = y, x
-
-    return (x, y)
-
-(
-    config.rotated_scan_x,
-    config.rotated_scan_y
-) = get_rotated_scan_x_y(config)
-
-config.rotated_scan_aspect = config.rotated_scan_x / config.rotated_scan_y
-
-
 ASPECT = config.rotated_scan_aspect
 
 
@@ -424,6 +393,10 @@ def repair_binding(img, bad_on_left, width=50):
     return img
 
 
+def px_of_mm(mm, dpi):
+    return mm * dpi / 25.4
+
+
 def process_image(in_path, out_path):
     """
     Robust page extraction that handles missing top (or bottom) edges.
@@ -533,9 +506,10 @@ def process_image(in_path, out_path):
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     H_img, W_img = img.shape[:2]
 
-    # FIXME wrong H_img?
-    expected_w = int(round(ASPECT * H_img))
-    expected_h = H_img
+    # fixed
+    # # FIXME wrong H_img?
+    # expected_w = int(round(ASPECT * H_img))
+    # expected_h = H_img
 
     dbgdir = os.path.join(OUTPUT_DIR, "debug", f"{page_num:03d}")
     if DEBUG: ensure_dir(dbgdir)
@@ -569,9 +543,10 @@ def process_image(in_path, out_path):
         bottom_angle = horizontal_line_angle(bottom_line)
         outside_angle = vertical_line_angle(outside_line)
 
-        # start debug prints
-        print()
-        print(f"line 570: page_num={page_num}")
+        if DEBUG:
+            # start debug prints
+            print()
+            print(f"line 570: page_num={page_num}")
 
         rotation_error = -1 * (
             -top_angle
@@ -584,12 +559,13 @@ def process_image(in_path, out_path):
             1.0
         )
 
-        print(
-            f"line 575: before rotation: "
-            f"top_angle={top_angle:.3f} "
-            f"bottom_angle={bottom_angle:.3f} "
-            f"outside_angle={outside_angle:.3f}"
-        )
+        if DEBUG:
+            print(
+                f"line 575: before rotation: "
+                f"top_angle={top_angle:.3f} "
+                f"bottom_angle={bottom_angle:.3f} "
+                f"outside_angle={outside_angle:.3f}"
+            )
 
         rotated = cv2.warpAffine(
             img,
@@ -599,31 +575,39 @@ def process_image(in_path, out_path):
         )
 
         Hr, Wr = rotated.shape[:2]
-        print("line 580: rotated size", Wr, Hr)
+
+        if DEBUG:
+            print("line 580: rotated size", Wr, Hr)
 
         # img = rotated # ?
+
+
 
         # re-detect lines in the rotated image
 
         # gray, mask, contours = get_gray_mask_contours(img, dbgdir)
         gray, mask, contours = get_gray_mask_contours(rotated, dbgdir)
 
-        top_angle2 = horizontal_line_angle(top_line)
-        bottom_angle2 = horizontal_line_angle(bottom_line)
-        outside_angle2 = vertical_line_angle(outside_line)
+        if 1:
+            top_angle2 = horizontal_line_angle(top_line)
+            bottom_angle2 = horizontal_line_angle(bottom_line)
+            outside_angle2 = vertical_line_angle(outside_line)
 
-        print(
-            f"line 620: after rotation and re-fitting: "
-            f"top_angle2={top_angle2:.3f} "
-            f"bottom_angle2={bottom_angle2:.3f} "
-            f"outside_angle2={outside_angle2:.3f}"
-        )
+            if DEBUG:
+                print(
+                    f"line 620: after rotation and re-fitting: "
+                    f"top_angle2={top_angle2:.3f} "
+                    f"bottom_angle2={bottom_angle2:.3f} "
+                    f"outside_angle2={outside_angle2:.3f}"
+                )
 
         if not contours:
             print(f"line 630: Warning: no contours found in {in_path}")
             return
 
         page_contour = max(contours, key=cv2.contourArea)
+
+
 
         top_pts, bottom_pts, outside_pts = split_edge_candidates(
             page_contour,
@@ -634,34 +618,161 @@ def process_image(in_path, out_path):
         bottom_line = fit_line_ransac(bottom_pts)[:4]
         outside_line = fit_line_ransac(outside_pts)[:4]
 
-        # FIXME H_img is wrong
-        expected_h = H_img
-        expected_w = int(round(ASPECT * expected_h))
+        # fixed
+        # # FIXME H_img is wrong
+        # expected_h = H_img
+        # expected_w = int(round(ASPECT * expected_h))
 
         vx, vy, x0, y0 = outside_line
 
+        outside_top = intersect_lines(
+            outside_line,
+            top_line
+        )
+
+        outside_bottom = intersect_lines(
+            outside_line,
+            bottom_line
+        )
+
         if 0:
-            old
-            if bad_on_left:
-                x_out = x0
-                x0_page = x_out
-                x1_page = x_out + expected_w
-            else:
-                x_out = x0
-                x1_page = x_out
-                x0_page = x_out - expected_w
+            # approximated page height
+            page_height = math.dist(
+                outside_top,
+                outside_bottom
+            )
         else:
-            # new
-            outside_top = intersect_lines(
-                outside_line,
-                top_line
+            # perpendicular page height
+            page_height = math.hypot(
+                outside_bottom[0] - outside_top[0],
+                outside_bottom[1] - outside_top[1]
             )
 
-            outside_bottom = intersect_lines(
-                outside_line,
-                bottom_line
-            )
+        # no. this fails to reconstruct the page height...
+        # TODO try to solve this with the average height of multiple pages
+        # assuming all pages must have the same height
+        # also allowing the user to specify a scale_y factor
+        if 0:
+            # fix scan height
+            # document scanners can distort scans in the Y direction
+            if 0:
+                # use rotated_scan_y and page_height
+                rotated_scan_y_px = px_of_mm(config.rotated_scan_y, config.scan_resolution)
+                target_h = rotated_scan_y_px
+                scale_y = target_h / page_height
+            elif 1:
+                # use rotated_margined_scan_y and H_img
+                rotated_margined_scan_y_px = px_of_mm(config.rotated_margined_scan_y, config.scan_resolution)
+                target_h = rotated_margined_scan_y_px
+                scale_y = target_h / H_img
+            else:
+                # no, this fails because the scanner removes one edge
+                # so actual_aspect is always wrong...
+                #
+                # use rotated_margined_scan_y and H_img
+                # expected: what we ordered from the scanner
+                expected_aspect = (
+                    config.rotated_margined_scan_x /
+                    config.rotated_margined_scan_y
+                )
+                expected_height = config.rotated_margined_scan_y
+                # actual: what the scanner gave us
+                actual_aspect = W_img / H_img
+                actual_height = H_img
+                # we assume the scanner always returns correct X coordinates
+                # and all errors are only in Y coordinates
+                # expected_aspect / actual_aspect = actual_height / expected_height
+                actual_height_2 = expected_aspect / actual_aspect / expected_height
+                expected_aspect_factor = expected_aspect / actual_aspect
+                # the scale of actual_height relative to actual_height_2
+                actual_height_scale = actual_height / actual_height_2
+                if DEBUG:
+                    print(f"expected_aspect={expected_aspect} actual_aspect={actual_aspect} expected_aspect_factor={expected_aspect_factor}")
+                    print(f"expected_height={expected_height} actual_height={actual_height} actual_height_2={actual_height_2} actual_height_scale={actual_height_scale}")
+                target_h = actual_height_2
+                scale_y = target_h / H_img
 
+            # debug: manually set the scale_y factor
+            # scale_y = 1 / 1.03 # shrink the page height by 3%
+
+            scale_y_tolerance = 0.001 # 0.1%
+
+            if scale_y < (1 - scale_y_tolerance) or (1 + scale_y_tolerance) < scale_y:
+                if DEBUG:
+                    print(f"line 680: scale_y={scale_y} target_h={target_h} page_height={page_height} -> scaling height")
+                rotated = cv2.resize(
+                    rotated,
+                    None,
+                    fx=1.0,
+                    fy=scale_y,
+                    interpolation=cv2.INTER_CUBIC
+                )
+                page_height = page_height * scale_y
+
+                # re-detect lines in the scaled image
+
+                # gray, mask, contours = get_gray_mask_contours(img, dbgdir)
+                gray, mask, contours = get_gray_mask_contours(rotated, dbgdir)
+
+                if 1:
+                    top_angle2 = horizontal_line_angle(top_line)
+                    bottom_angle2 = horizontal_line_angle(bottom_line)
+                    outside_angle2 = vertical_line_angle(outside_line)
+                    if DEBUG:
+                        print(
+                            f"line 620: after rotation and re-fitting: "
+                            f"top_angle2={top_angle2:.3f} "
+                            f"bottom_angle2={bottom_angle2:.3f} "
+                            f"outside_angle2={outside_angle2:.3f}"
+                        )
+
+                if not contours:
+                    print(f"line 630: Warning: no contours found in {in_path}")
+                    return
+
+                page_contour = max(contours, key=cv2.contourArea)
+
+                top_pts, bottom_pts, outside_pts = split_edge_candidates(
+                    page_contour,
+                    bad_on_left
+                )
+
+                top_line = fit_line_ransac(top_pts)[:4]
+                bottom_line = fit_line_ransac(bottom_pts)[:4]
+                outside_line = fit_line_ransac(outside_pts)[:4]
+
+                # fixed
+                # # FIXME H_img is wrong
+                # expected_h = H_img
+                # expected_w = int(round(ASPECT * expected_h))
+
+                vx, vy, x0, y0 = outside_line
+
+                outside_top = intersect_lines(
+                    outside_line,
+                    top_line
+                )
+
+                outside_bottom = intersect_lines(
+                    outside_line,
+                    bottom_line
+                )
+
+            else:
+                if DEBUG:
+                    print(f"line 680: scale_y={scale_y} target_h={target_h} page_height={page_height} -> not scaling height")
+
+        expected_h = int(round(page_height))
+
+        # ASPECT = x / y
+        # x = y * ASPECT
+
+        # expand the binding edge to expected_w
+        # expected_w = int(round(expected_h * ASPECT))
+        expected_w = int(round(page_height * ASPECT))
+
+        if 0:
+            # crop as a rectangle
             x_out = (
                 outside_top[0]
                 +
@@ -687,50 +798,198 @@ def process_image(in_path, out_path):
                 x1_page = x_out + expected_w
 
             # clamp
-            x0_page = max(0, x0_page)
-            x1_page = min(rotated.shape[1], x1_page)
+            # x0_page = max(0, x0_page)
+            # x1_page = min(rotated.shape[1], x1_page)
 
-            print(
-                "line 640:",
-                f"outside_top={outside_top}",
-                f"outside_bottom={outside_bottom}",
+            y_top = int(round(outside_top[1]))
+            y_bottom = int(round(outside_bottom[1]))
+
+            src_x0 = max(0, x0_page)
+            src_x1 = min(rotated.shape[1], x1_page)
+
+            src_y0 = max(0, y_top)
+            src_y1 = min(rotated.shape[0], y_top + expected_h)
+
+            dst_x0 = src_x0 - x0_page
+            dst_y0 = src_y0 - y_top
+
+            if DEBUG:
+                print(
+                    "line 640:",
+                    f"outside_top={outside_top}",
+                    f"outside_bottom={outside_bottom}",
+                )
+
+            # crop = rotated[
+            #     y_top:y_top+expected_h,
+            #     x0_page:x1_page
+            # ]
+
+            full_crop = np.ones(
+                (expected_h, expected_w, 3),
+                dtype=rotated.dtype
+            ) * 255
+
+            full_crop[
+                dst_y0:dst_y0 + (src_y1-src_y0),
+                dst_x0:dst_x0 + (src_x1-src_x0)
+            ] = rotated[
+                src_y0:src_y1,
+                src_x0:src_x1
+            ]
+
+            # FIXME fill empty area near binding edge
+            # currently it is all white
+            # but it should copy the vertical pattern near the binding edge
+
+            crop = full_crop
+
+            if DEBUG:
+                print(
+                    "line 650: crop",
+                    f"W_img={W_img}",
+                    f"H_img={H_img}",
+                    f"x0_page={x0_page}",
+                    f"x1_page={x1_page}",
+                    f"y_top={y_top}",
+                    f"y_bottom={y_bottom}",
+                    f"src_x0={src_x0}",
+                    f"src_x1={src_x1}",
+                    f"src_y0={src_y0}",
+                    f"src_y1={src_y1}",
+                    f"dst_x0={dst_x0}",
+                    f"dst_y0={dst_y0}",
+                    f"expected_w={expected_w}",
+                    f"expected_h={expected_h}",
+                )
+
+            if DEBUG:
+                vis = rotated.copy()
+                cv2.rectangle(
+                    vis,
+                    (int(x0_page), int(y_top)),
+                    (int(x1_page), int(y_bottom)),
+                    (0,0,255),
+                    3,
+                )
+                name = f"{page_num:03d}.crop_debug_rotated_line730.jpg"
+                print(f"writing {name}")
+                cv2.imwrite(name, vis)
+
+        else:
+            # crop as a quadrilateral
+            # not better than "crop as a rectangle"?
+            if 0:
+                # expand the binding edge to expected_w
+                if bad_on_left:
+                    # outside edge is the RIGHT edge
+                    x1_top = outside_top[0]
+                    x1_bottom = outside_bottom[0]
+                    x0_top = x1_top - expected_w
+                    x0_bottom = x1_bottom - expected_w
+                else:
+                    # outside edge is the LEFT edge
+                    x0_top = outside_top[0]
+                    x0_bottom = outside_bottom[0]
+                    x1_top = x0_top + expected_w
+                    x1_bottom = x0_bottom + expected_w
+            else:
+                # dont expand the binding edge to expected_w
+                # use only the detected page edges
+                # if bad_on_left:
+                #     # outside edge is RIGHT edge
+                #     x1_top = outside_top[0]
+                #     x1_bottom = outside_bottom[0]
+                #     # use the actual detected left edge
+                #     x0_top = np.min(page_contour[:,0,0])
+                #     x0_bottom = x0_top
+                # else:
+                #     # outside edge is LEFT edge
+                #     x0_top = outside_top[0]
+                #     x0_bottom = outside_bottom[0]
+                #     # use the actual detected right edge
+                #     x1_top = np.max(page_contour[:,0,0])
+                #     x1_bottom = x1_top
+                # problem: page_contour after thresholding may include the background
+                # or may not have a reliable missing-edge position.
+                # A cleaner temporary solution is to use the detected quadrilateral width
+                # from the two horizontal edge intersections
+                if bad_on_left:
+                    # outside edge is right
+                    x1_top = outside_top[0]
+                    x1_bottom = outside_bottom[0]
+                    # find leftmost detected page boundary
+                    x0_top = np.min(top_pts[:,0])
+                    x0_bottom = np.min(bottom_pts[:,0])
+                else:
+                    # outside edge is left
+                    x0_top = outside_top[0]
+                    x0_bottom = outside_bottom[0]
+                    # find rightmost detected page boundary
+                    x1_top = np.max(top_pts[:,0])
+                    x1_bottom = np.max(bottom_pts[:,0])
+
+                # dont expand the binding edge to expected_w
+                expected_w = int(round(
+                    math.dist((x0_top, outside_top[1]), (x1_top, outside_top[1]))
+                ))
+
+
+            src = np.float32([
+                [x0_top, outside_top[1]],
+                [x1_top, outside_top[1]],
+                [x1_bottom, outside_bottom[1]],
+                [x0_bottom, outside_bottom[1]],
+            ])
+
+            dst = np.float32([
+                [0,0],
+                [expected_w-1,0],
+                [expected_w-1,expected_h-1],
+                [0,expected_h-1],
+            ])
+
+            M = cv2.getPerspectiveTransform(src, dst)
+
+            crop = cv2.warpPerspective(
+                rotated,
+                M,
+                (expected_w, expected_h),
+                borderValue=(255,255,255)
             )
 
-        y_top = int(round(outside_top[1]))
-        y_bottom = int(round(outside_bottom[1]))
-        crop = rotated[
-            y_top:y_top+expected_h,
-            x0_page:x1_page
-        ]
+            if DEBUG:
+                print(
+                    "line 650: crop",
+                    f"W_img={W_img}",
+                    f"H_img={H_img}",
+                    f"outside_top={outside_top}",
+                    f"outside_bottom={outside_bottom}",
+                    f"x1_top={x1_top}",
+                    f"x1_bottom={x1_bottom}",
+                    f"x0_top={x0_top}",
+                    f"x0_bottom={x0_bottom}",
+                    f"expected_w={expected_w}",
+                    f"expected_h={expected_h}",
+                )
 
-        print(
-            "line 650: crop",
-            f"x0_page={x0_page}",
-            f"x1_page={x1_page}",
-            f"y_top={y_top}",
-            f"y_bottom={y_bottom}",
-            f"expected_w={expected_w}",
-            f"expected_h={expected_h}",
-        )
+            if DEBUG:
+                vis = rotated.copy()
+                pts = np.array([
+                    [x0_top, outside_top[1]],
+                    [x1_top, outside_top[1]],
+                    [x1_bottom, outside_bottom[1]],
+                    [x0_bottom, outside_bottom[1]],
+                ], np.int32)
+                cv2.polylines(vis, [pts], True, (0,0,255), 3)
+                name = f"{page_num:03d}.crop_debug_rotated_line730.jpg"
+                print(f"writing {name}")
+                cv2.imwrite(name, vis)
 
         # crop = rotated[
         #     0:expected_h,
         #     int(x0_page):int(x1_page)
         # ]
-
-        if 1:
-            # debug
-            vis = rotated.copy()
-            cv2.rectangle(
-                vis,
-                (int(x0_page), int(y_top)),
-                (int(x1_page), int(y_bottom)),
-                (0,0,255),
-                3,
-            )
-            name = f"{page_num:03d}.crop_debug_rotated_line730.jpg"
-            print(f"writing {name}")
-            cv2.imwrite(name, vis)
 
         # y_top = round(outside_top[1])
         # y_bottom = round(outside_bottom[1])
@@ -747,25 +1006,28 @@ def process_image(in_path, out_path):
         #     x0_page:x1_page
         # ]
 
-        # img = repair_binding(img, bad_on_left, width=50)
-        if 1:
-            # rotated = repair_binding(rotated, bad_on_left, width=50)
-            # Hr, Wr = rotated.shape[:2]
-            # print("line 660: rotated size", Wr, Hr)
-            # warped = rotated
-            crop = repair_binding(crop, bad_on_left, width=50)
-            Hr, Wr = crop.shape[:2]
-            print("line 660: crop size", Wr, Hr)
-            warped = crop
-        else:
-            crop = repair_binding(crop, bad_on_left, width=50)
-            warped = crop
+        if 0:
+            # img = repair_binding(img, bad_on_left, width=50)
+            if 1:
+                # rotated = repair_binding(rotated, bad_on_left, width=50)
+                # Hr, Wr = rotated.shape[:2]
+                # print("line 660: rotated size", Wr, Hr)
+                # warped = rotated
+                crop = repair_binding(crop, bad_on_left, width=50)
+                Hr, Wr = crop.shape[:2]
+                if DEBUG:
+                    print("line 660: crop size", Wr, Hr)
+            else:
+                crop = repair_binding(crop, bad_on_left, width=50)
 
-        print(
-            "line 760: after crop: crop actual:",
-            f"crop.shape[1]={crop.shape[1]}"
-            f"expected_w={expected_w}"
-        )
+            if DEBUG:
+                print(
+                    "line 760: after repair_binding: crop actual:",
+                    f"crop.shape[1]={crop.shape[1]}",
+                    f"expected_w={expected_w}",
+                )
+
+        warped = crop
 
     else:
         # config.use_three_edge_deskew == False
@@ -834,11 +1096,13 @@ def process_image(in_path, out_path):
             raise ValueError("Invalid axis")
         return np.mean(strip, axis=(0,1)).astype(np.uint8)
 
-    # Fill borders with local average color
-    canvas[0:b, :, :] = avg_color_strip(canvas, 'top', 50, 100)       # top border
-    canvas[h-b:h, :, :] = avg_color_strip(canvas, 'bottom', 50, 100)  # bottom border
-    canvas[:, 0:b, :] = avg_color_strip(canvas, 'left', 50, 100)      # left border
-    canvas[:, w-b:w, :] = avg_color_strip(canvas, 'right', 50, 100)   # right border
+    # FIXME preserve patterns near edges
+    if 0:
+        # Fill borders with local average color
+        canvas[0:b, :, :] = avg_color_strip(canvas, 'top', 50, 100)       # top border
+        canvas[h-b:h, :, :] = avg_color_strip(canvas, 'bottom', 50, 100)  # bottom border
+        canvas[:, 0:b, :] = avg_color_strip(canvas, 'left', 50, 100)      # left border
+        canvas[:, w-b:w, :] = avg_color_strip(canvas, 'right', 50, 100)   # right border
 
     if input_is_grayscale:
         canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
