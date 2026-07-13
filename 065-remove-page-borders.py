@@ -275,11 +275,18 @@ def order_points(pts):
     return rect
 
 
-def split_edge_candidates(contour, bad_on_left):
+def split_edge_candidates(contour, bad_on_left, page_num):
     pts = contour.reshape(-1, 2)
 
     xs = pts[:,0]
     ys = pts[:,1]
+
+    print(
+        "split_edge_candidates:",
+        f"page_num={page_num}",
+        f"bad_on_left={bad_on_left}",
+        f"bbox=[{xs.min()}, {xs.max()}]",
+    )
 
     w = xs.max() - xs.min()
     h = ys.max() - ys.min()
@@ -302,9 +309,27 @@ def split_edge_candidates(contour, bad_on_left):
     return top, bottom, outside
 
 
-def line_angle(line):
-    vx, vy, _, _ = line
-    return math.atan2(vy, vx)
+if 1:
+    # new
+    def line_angle(line):
+        vx, vy, _, _ = line
+
+        angle = math.degrees(math.atan2(vy, vx))
+
+        # lines have no direction
+        while angle <= -90:
+            angle += 180
+
+        while angle > 90:
+            angle -= 180
+
+        return angle
+
+else:
+    # old
+    def line_angle(line):
+        vx, vy, _, _ = line
+        return math.degrees(math.atan2(vy, vx))
 
 
 def normalize_angle_deg(a):
@@ -500,7 +525,8 @@ def process_image(in_path, out_path):
 
         top_pts, bottom_pts, outside_pts = split_edge_candidates(
             page_contour,
-            bad_on_left
+            bad_on_left,
+            page_num,
         )
 
         top_line = fit_line_ransac(top_pts)[:4]
@@ -511,11 +537,25 @@ def process_image(in_path, out_path):
         bottom_angle = math.degrees(line_angle(bottom_line))
         outside_angle = math.degrees(line_angle(outside_line))
 
-        rotation_error = (
-            -top_angle
-            -bottom_angle
-            +(90 - outside_angle)
-        ) / 3.0
+        if 1:
+            # new
+            rotation_error = (
+                -top_angle
+                -bottom_angle
+            ) / 2
+
+            outside_after = outside_angle + rotation_error
+
+            if abs(abs(outside_after)-90) > 2:
+                print("warning: outside edge disagreement")
+
+        else:
+            # old
+            rotation_error = (
+                -top_angle
+                -bottom_angle
+                +(90 - outside_angle)
+            ) / 3.0
 
         Mrot = cv2.getRotationMatrix2D(
             (W_img/2, H_img/2),
@@ -543,7 +583,8 @@ def process_image(in_path, out_path):
 
         _, _, outside_pts = split_edge_candidates(
             page_contour,
-            bad_on_left
+            bad_on_left,
+            page_num,
         )
 
         outside_line = fit_line_ransac(outside_pts)[:4]
@@ -568,10 +609,13 @@ def process_image(in_path, out_path):
             int(x0_page):int(x1_page)
         ]
 
-        # img = repair_binding(img, bad_on_left, width=50)
-        rotated = repair_binding(rotated, bad_on_left, width=50)
-
-        warped = rotated
+        if 1:
+            # new
+            crop = repair_binding(crop, bad_on_left, width=50)
+            warped = crop
+        else:
+            # old
+            warped = rotated
 
     else:
         # USE_THREE_EDGE_DESKEW == False
