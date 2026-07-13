@@ -12,7 +12,7 @@ import requests
 
 
 # source directory
-src = "070-deskew"
+src = "0685-fill-white-pages"
 
 # default config
 scan_resolution = 300
