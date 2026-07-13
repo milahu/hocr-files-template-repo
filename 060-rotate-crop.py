@@ -20,13 +20,44 @@ from _shared import (
 
 # --- Setup -------------------------------------------------------------------
 os.chdir(Path(__file__).resolve().parent)
-src = Path("045-crop-scan-area")
+src = Path("040-scan-pages")
 dst = Path(Path(__file__).stem)
 dst.mkdir(parents=True, exist_ok=True)
 
 
 # --- Settings ----------------------------------------------------------------
 config = load_config()
+
+
+def remove_bottom_white_rectangle(img):
+    """
+    Detect and remove bottom white rectangle (artifact) from a scanned image.
+    Assumes the white rectangle spans the entire image width.
+    """
+
+    # Convert to grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Image dimensions
+    height, width = gray.shape
+
+    # Determine where the bottom white area starts
+    white_threshold = 250  # near pure white
+    bottom_crop_y = height  # default (no crop)
+
+    # Scan upward from the bottom to find the first non-white row
+    for y in range(height - 1, -1, -1):
+        row = gray[y, :]
+        if np.mean(row < white_threshold) > 0.01:  # some non-white pixels
+            bottom_crop_y = y + 1
+            break
+
+    # Crop only if a white rectangle was found
+    if bottom_crop_y < height:
+        x1, y1, x2, y2 = 0, 0, width, bottom_crop_y
+        img = img[y1:y2, x1:x2]
+
+    return img
 
 
 # --- Worker ------------------------------------------------------------------
@@ -46,6 +77,8 @@ def process_image(image_path: Path) -> str:
     if img is None:
         print(f"error: failed to read {image_path}")
         sys.exit(1)
+
+    img = remove_bottom_white_rectangle(img)
 
     # Rotate
     if config.do_rotate:
@@ -84,7 +117,7 @@ def try_process_image(*args):
 # --- Parallel execution ------------------------------------------------------
 if __name__ == "__main__":
     t1 = time.time()
-    images = sorted(src.glob(f"*.{config.image_format}"))
+    images = sorted(src.glob(f"*.{config.scan_format}"))
     if not images:
         print("No input files found.")
         exit(0)
