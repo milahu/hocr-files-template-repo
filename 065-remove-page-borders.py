@@ -37,21 +37,45 @@ from _shared import (
 
 config = load_config()
 
-scan_x = config.scan_x
-scan_y = config.scan_y
+# no, this is wrong if (config.do_rotate == True)
+# scan_x = config.scan_x
+# scan_y = config.scan_y
+# config.scan_aspect = scan_x / scan_y
+# ASPECT = config.scan_aspect
 
-config.scan_aspect = scan_x / scan_y
-
-ASPECT = config.scan_aspect
-
+# TODO move to load_config
 # book binding side = scanner top side
-USE_THREE_EDGE_DESKEW = (
+config.use_three_edge_deskew = (
     config.do_rotate
     and config.rotate_odd == 270
     and config.rotate_even == 90
 )
 
-print(f"USE_THREE_EDGE_DESKEW: {USE_THREE_EDGE_DESKEW}")
+print(f"config.use_three_edge_deskew: {config.use_three_edge_deskew}")
+
+# TODO move to load_config
+def get_rotated_scan_x_y(config):
+    # scanned image size after 060-rotate-crop.py
+    # NOTE dont apply crop
+    x = config.scan_x
+    y = config.scan_y
+
+    if config.use_three_edge_deskew:
+        # rotate by 90 or 270 degrees
+        x, y = y, x
+
+    return (x, y)
+
+(
+    config.rotated_scan_x,
+    config.rotated_scan_y
+) = get_rotated_scan_x_y(config)
+
+config.rotated_scan_aspect = config.rotated_scan_x / config.rotated_scan_y
+
+
+ASPECT = config.rotated_scan_aspect
+
 
 def ensure_dir(p):
     os.makedirs(p, exist_ok=True)
@@ -524,7 +548,7 @@ def process_image(in_path, out_path):
 
     page_contour = max(contours, key=cv2.contourArea)
 
-    if USE_THREE_EDGE_DESKEW:
+    if config.use_three_edge_deskew:
 
         top_pts, bottom_pts, outside_pts = split_edge_candidates(
             page_contour,
@@ -545,15 +569,9 @@ def process_image(in_path, out_path):
         bottom_angle = horizontal_line_angle(bottom_line)
         outside_angle = vertical_line_angle(outside_line)
 
-        print(
-            page_num,
-            "top",
-            top_angle,
-            "bottom",
-            bottom_angle,
-            "outside",
-            outside_angle
-        )
+        # start debug prints
+        print()
+        print(f"line 570: page_num={page_num}")
 
         rotation_error = -1 * (
             -top_angle
@@ -566,6 +584,13 @@ def process_image(in_path, out_path):
             1.0
         )
 
+        print(
+            f"line 575: before rotation: "
+            f"top_angle={top_angle:.3f} "
+            f"bottom_angle={bottom_angle:.3f} "
+            f"outside_angle={outside_angle:.3f}"
+        )
+
         rotated = cv2.warpAffine(
             img,
             Mrot,
@@ -573,22 +598,40 @@ def process_image(in_path, out_path):
             borderValue=(255,255,255)
         )
 
+        Hr, Wr = rotated.shape[:2]
+        print("line 580: rotated size", Wr, Hr)
+
         # img = rotated # ?
+
+        # re-detect lines in the rotated image
 
         # gray, mask, contours = get_gray_mask_contours(img, dbgdir)
         gray, mask, contours = get_gray_mask_contours(rotated, dbgdir)
 
+        top_angle2 = horizontal_line_angle(top_line)
+        bottom_angle2 = horizontal_line_angle(bottom_line)
+        outside_angle2 = vertical_line_angle(outside_line)
+
+        print(
+            f"line 620: after rotation and re-fitting: "
+            f"top_angle2={top_angle2:.3f} "
+            f"bottom_angle2={bottom_angle2:.3f} "
+            f"outside_angle2={outside_angle2:.3f}"
+        )
+
         if not contours:
-            print(f"Warning: no contours found in {in_path}")
+            print(f"line 630: Warning: no contours found in {in_path}")
             return
 
         page_contour = max(contours, key=cv2.contourArea)
 
-        _, _, outside_pts = split_edge_candidates(
+        top_pts, bottom_pts, outside_pts = split_edge_candidates(
             page_contour,
             bad_on_left
         )
 
+        top_line = fit_line_ransac(top_pts)[:4]
+        bottom_line = fit_line_ransac(bottom_pts)[:4]
         outside_line = fit_line_ransac(outside_pts)[:4]
 
         # FIXME H_img is wrong
@@ -625,29 +668,107 @@ def process_image(in_path, out_path):
                 outside_bottom[0]
             ) / 2
 
+            x_out = int(round(x_out))
+
+            # if bad_on_left:
+            #     x0_page = x_out
+            #     x1_page = x_out + expected_w
+            # else:
+            #     x0_page = x_out - expected_w
+            #     x1_page = x_out
+
             if bad_on_left:
-                x0_page = int(round(x_out))
-                x1_page = int(round(x_out + expected_w))
-
+                # outside edge is RIGHT
+                x1_page = x_out
+                x0_page = x_out - expected_w
             else:
-                x0_page = int(round(x_out - expected_w))
-                x1_page = int(round(x_out))
+                # outside edge is LEFT
+                x0_page = x_out
+                x1_page = x_out + expected_w
 
+            # clamp
+            x0_page = max(0, x0_page)
+            x1_page = min(rotated.shape[1], x1_page)
+
+            print(
+                "line 640:",
+                f"outside_top={outside_top}",
+                f"outside_bottom={outside_bottom}",
+            )
+
+        y_top = int(round(outside_top[1]))
+        y_bottom = int(round(outside_bottom[1]))
         crop = rotated[
-            0:expected_h,
-            int(x0_page):int(x1_page)
+            y_top:y_top+expected_h,
+            x0_page:x1_page
         ]
+
+        print(
+            "line 650: crop",
+            f"x0_page={x0_page}",
+            f"x1_page={x1_page}",
+            f"y_top={y_top}",
+            f"y_bottom={y_bottom}",
+            f"expected_w={expected_w}",
+            f"expected_h={expected_h}",
+        )
+
+        # crop = rotated[
+        #     0:expected_h,
+        #     int(x0_page):int(x1_page)
+        # ]
+
+        if 1:
+            # debug
+            vis = rotated.copy()
+            cv2.rectangle(
+                vis,
+                (int(x0_page), int(y_top)),
+                (int(x1_page), int(y_bottom)),
+                (0,0,255),
+                3,
+            )
+            name = f"{page_num:03d}.crop_debug_rotated_line730.jpg"
+            print(f"writing {name}")
+            cv2.imwrite(name, vis)
+
+        # y_top = round(outside_top[1])
+        # y_bottom = round(outside_bottom[1])
+        # actual_height = y_bottom - y_top
+        # crop = rotated[
+        #     y_top:y_top + expected_h,
+        #     x0_page:x1_page
+        # ]
+
+        # y_top = int(round(outside_top[1]))
+        # y_bottom = int(round(outside_bottom[1]))
+        # crop = rotated[
+        #     y_top:y_bottom,
+        #     x0_page:x1_page
+        # ]
 
         # img = repair_binding(img, bad_on_left, width=50)
         if 1:
-            rotated = repair_binding(rotated, bad_on_left, width=50)
-            warped = rotated
+            # rotated = repair_binding(rotated, bad_on_left, width=50)
+            # Hr, Wr = rotated.shape[:2]
+            # print("line 660: rotated size", Wr, Hr)
+            # warped = rotated
+            crop = repair_binding(crop, bad_on_left, width=50)
+            Hr, Wr = crop.shape[:2]
+            print("line 660: crop size", Wr, Hr)
+            warped = crop
         else:
             crop = repair_binding(crop, bad_on_left, width=50)
             warped = crop
 
+        print(
+            "line 760: after crop: crop actual:",
+            f"crop.shape[1]={crop.shape[1]}"
+            f"expected_w={expected_w}"
+        )
+
     else:
-        # USE_THREE_EDGE_DESKEW == False
+        # config.use_three_edge_deskew == False
         # FIXME use only two page edges: outside, bottom
         # Approximate contour to quadrilateral
         epsilon = 0.02 * cv2.arcLength(page_contour, True)
