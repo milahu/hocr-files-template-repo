@@ -12,7 +12,7 @@ OUTPUT_DIR = "065-remove-page-borders"
 
 # === Tuning parameters ===
 DEBUG = True
-DEBUG = False
+# DEBUG = False
 BORDER_SIZE = 100  # pixels
 
 RANSAC_ITER = 400
@@ -653,114 +653,228 @@ def process_image(in_path, out_path):
         # assuming all pages must have the same height
         # also allowing the user to specify a scale_y factor
         if 0:
-            # fix scan height
-            # document scanners can distort scans in the Y direction
-            if 0:
-                # use rotated_scan_y and page_height
-                rotated_scan_y_px = px_of_mm(config.rotated_scan_y, config.scan_resolution)
-                target_h = rotated_scan_y_px
-                scale_y = target_h / page_height
-            elif 1:
-                # use rotated_margined_scan_y and H_img
-                rotated_margined_scan_y_px = px_of_mm(config.rotated_margined_scan_y, config.scan_resolution)
-                target_h = rotated_margined_scan_y_px
-                scale_y = target_h / H_img
-            else:
-                # no, this fails because the scanner removes one edge
-                # so actual_aspect is always wrong...
-                #
-                # use rotated_margined_scan_y and H_img
-                # expected: what we ordered from the scanner
-                expected_aspect = (
-                    config.rotated_margined_scan_x /
-                    config.rotated_margined_scan_y
-                )
-                expected_height = config.rotated_margined_scan_y
-                # actual: what the scanner gave us
-                actual_aspect = W_img / H_img
-                actual_height = H_img
-                # we assume the scanner always returns correct X coordinates
-                # and all errors are only in Y coordinates
-                # expected_aspect / actual_aspect = actual_height / expected_height
-                actual_height_2 = expected_aspect / actual_aspect / expected_height
-                expected_aspect_factor = expected_aspect / actual_aspect
-                # the scale of actual_height relative to actual_height_2
-                actual_height_scale = actual_height / actual_height_2
-                if DEBUG:
-                    print(f"expected_aspect={expected_aspect} actual_aspect={actual_aspect} expected_aspect_factor={expected_aspect_factor}")
-                    print(f"expected_height={expected_height} actual_height={actual_height} actual_height_2={actual_height_2} actual_height_scale={actual_height_scale}")
-                target_h = actual_height_2
-                scale_y = target_h / H_img
-
-            # debug: manually set the scale_y factor
-            # scale_y = 1 / 1.03 # shrink the page height by 3%
-
-            scale_y_tolerance = 0.001 # 0.1%
-
-            if scale_y < (1 - scale_y_tolerance) or (1 + scale_y_tolerance) < scale_y:
-                if DEBUG:
-                    print(f"line 680: scale_y={scale_y} target_h={target_h} page_height={page_height} -> scaling height")
-                rotated = cv2.resize(
-                    rotated,
-                    None,
-                    fx=1.0,
-                    fy=scale_y,
-                    interpolation=cv2.INTER_CUBIC
-                )
-                page_height = page_height * scale_y
-
-                # re-detect lines in the scaled image
-
-                # gray, mask, contours = get_gray_mask_contours(img, dbgdir)
-                gray, mask, contours = get_gray_mask_contours(rotated, dbgdir)
-
-                if 1:
-                    top_angle2 = horizontal_line_angle(top_line)
-                    bottom_angle2 = horizontal_line_angle(bottom_line)
-                    outside_angle2 = vertical_line_angle(outside_line)
+            if config.do_rotate == False:
+                # fix scan height
+                # document scanners can distort scans in the Y direction
+                # FIXME honor config.do_rotate
+                # if (config.do_rotate == True)
+                # then all pages are rotated by 90 or 270 degrees
+                # so the scanner's Y errors become our X errors
+                # so we need scale_x to fix the page width
+                if 0:
+                    # use rotated_scan_y and page_height
+                    rotated_scan_y_px = px_of_mm(config.rotated_scan_y, config.scan_resolution)
+                    target_h = rotated_scan_y_px
+                    scale_y = target_h / page_height
+                elif 1:
+                    # use rotated_margined_scan_y and H_img
+                    rotated_margined_scan_y_px = px_of_mm(config.rotated_margined_scan_y, config.scan_resolution)
+                    target_h = rotated_margined_scan_y_px
+                    scale_y = target_h / H_img
+                else:
+                    # no, this fails because the scanner removes one edge
+                    # so actual_aspect is always wrong...
+                    #
+                    # use rotated_margined_scan_y and H_img
+                    # expected: what we ordered from the scanner
+                    expected_aspect = (
+                        config.rotated_margined_scan_x /
+                        config.rotated_margined_scan_y
+                    )
+                    expected_height = config.rotated_margined_scan_y
+                    # actual: what the scanner gave us
+                    actual_aspect = W_img / H_img
+                    actual_height = H_img
+                    # we assume the scanner always returns correct X coordinates
+                    # and all errors are only in Y coordinates
+                    # expected_aspect / actual_aspect = actual_height / expected_height
+                    actual_height_2 = expected_aspect / actual_aspect / expected_height
+                    expected_aspect_factor = expected_aspect / actual_aspect
+                    # the scale of actual_height relative to actual_height_2
+                    actual_height_scale = actual_height / actual_height_2
                     if DEBUG:
-                        print(
-                            f"line 620: after rotation and re-fitting: "
-                            f"top_angle2={top_angle2:.3f} "
-                            f"bottom_angle2={bottom_angle2:.3f} "
-                            f"outside_angle2={outside_angle2:.3f}"
+                        print(f"expected_aspect={expected_aspect} actual_aspect={actual_aspect} expected_aspect_factor={expected_aspect_factor}")
+                        print(f"expected_height={expected_height} actual_height={actual_height} actual_height_2={actual_height_2} actual_height_scale={actual_height_scale}")
+                    target_h = actual_height_2
+                    scale_y = target_h / H_img
+
+                # debug: manually set the scale_y factor
+                # scale_y = 1 / 1.03 # shrink the page height by 3%
+
+                scale_y_tolerance = 0.001 # 0.1%
+
+                if scale_y < (1 - scale_y_tolerance) or (1 + scale_y_tolerance) < scale_y:
+                    if DEBUG:
+                        print(f"line 680: scale_y={scale_y} target_h={target_h} page_height={page_height} -> scaling height")
+                    rotated = cv2.resize(
+                        rotated,
+                        None,
+                        fx=1.0,
+                        fy=scale_y,
+                        interpolation=cv2.INTER_CUBIC
+                    )
+                    page_height = page_height * scale_y
+
+                    # re-detect lines in the scaled image
+
+                    # gray, mask, contours = get_gray_mask_contours(img, dbgdir)
+                    gray, mask, contours = get_gray_mask_contours(rotated, dbgdir)
+
+                    if 1:
+                        top_angle2 = horizontal_line_angle(top_line)
+                        bottom_angle2 = horizontal_line_angle(bottom_line)
+                        outside_angle2 = vertical_line_angle(outside_line)
+                        if DEBUG:
+                            print(
+                                f"line 620: after rotation and re-fitting: "
+                                f"top_angle2={top_angle2:.3f} "
+                                f"bottom_angle2={bottom_angle2:.3f} "
+                                f"outside_angle2={outside_angle2:.3f}"
+                            )
+
+                    if not contours:
+                        print(f"line 630: Warning: no contours found in {in_path}")
+                        return
+
+                    page_contour = max(contours, key=cv2.contourArea)
+
+                    top_pts, bottom_pts, outside_pts = split_edge_candidates(
+                        page_contour,
+                        bad_on_left
+                    )
+
+                    top_line = fit_line_ransac(top_pts)[:4]
+                    bottom_line = fit_line_ransac(bottom_pts)[:4]
+                    outside_line = fit_line_ransac(outside_pts)[:4]
+
+                    # fixed
+                    # # FIXME H_img is wrong
+                    # expected_h = H_img
+                    # expected_w = int(round(ASPECT * expected_h))
+
+                    vx, vy, x0, y0 = outside_line
+
+                    outside_top = intersect_lines(
+                        outside_line,
+                        top_line
+                    )
+
+                    outside_bottom = intersect_lines(
+                        outside_line,
+                        bottom_line
+                    )
+
+                else:
+                    if DEBUG:
+                        print(f"line 680: scale_y={scale_y} target_h={target_h} page_height={page_height} -> not scaling height")
+
+            else:
+                # config.do_rotate == True
+                # fix scan width
+                # Raw scans are rotated by 90/270 degrees.
+                # Therefore: scanner Y errors -> image X errors
+                # We must correct width (scale_x), not height (scale_y).
+                if 1:
+                    # The detected outside edge gives us the real page height
+                    # in image coordinates.  After rotation this corresponds to
+                    # scanner X, which is assumed correct.
+                    #
+                    # The missing/damaged dimension is the page width.
+
+                    rotated_margined_scan_x_px = px_of_mm(
+                        config.rotated_margined_scan_x,
+                        config.scan_resolution
+                    )
+
+                    target_w = rotated_margined_scan_x_px
+
+                    actual_w = math.dist(
+                        outside_top,
+                        outside_bottom
+                    )
+
+                    # This is actually the width in scanner coordinates because
+                    # the document is rotated.
+                    scale_x = target_w / actual_w
+
+                    scale_x_tolerance = 0.001  # 0.1%
+
+                    if (
+                        scale_x < (1 - scale_x_tolerance)
+                        or
+                        scale_x > (1 + scale_x_tolerance)
+                    ):
+                        if DEBUG:
+                            print(
+                                "line 680:",
+                                f"scale_x={scale_x}",
+                                f"target_w={target_w}",
+                                f"actual_w={actual_w}",
+                                "-> scaling width"
+                            )
+
+                        rotated = cv2.resize(
+                            rotated,
+                            None,
+                            fx=scale_x,
+                            fy=1.0,
+                            interpolation=cv2.INTER_CUBIC
                         )
 
-                if not contours:
-                    print(f"line 630: Warning: no contours found in {in_path}")
-                    return
+                        # Update image size
+                        Hr, Wr = rotated.shape[:2]
 
-                page_contour = max(contours, key=cv2.contourArea)
+                        if DEBUG:
+                            print(
+                                "line 690: after scale_x",
+                                f"Wr={Wr}",
+                                f"Hr={Hr}"
+                            )
 
-                top_pts, bottom_pts, outside_pts = split_edge_candidates(
-                    page_contour,
-                    bad_on_left
-                )
+                        # Re-detect page after scaling
+                        gray, mask, contours = get_gray_mask_contours(
+                            rotated,
+                            dbgdir
+                        )
 
-                top_line = fit_line_ransac(top_pts)[:4]
-                bottom_line = fit_line_ransac(bottom_pts)[:4]
-                outside_line = fit_line_ransac(outside_pts)[:4]
+                        if not contours:
+                            print(
+                                f"line 700: Warning: no contours found after scaling {in_path}"
+                            )
+                            return
 
-                # fixed
-                # # FIXME H_img is wrong
-                # expected_h = H_img
-                # expected_w = int(round(ASPECT * expected_h))
+                        page_contour = max(
+                            contours,
+                            key=cv2.contourArea
+                        )
 
-                vx, vy, x0, y0 = outside_line
+                        top_pts, bottom_pts, outside_pts = split_edge_candidates(
+                            page_contour,
+                            bad_on_left
+                        )
 
-                outside_top = intersect_lines(
-                    outside_line,
-                    top_line
-                )
+                        top_line = fit_line_ransac(top_pts)[:4]
+                        bottom_line = fit_line_ransac(bottom_pts)[:4]
+                        outside_line = fit_line_ransac(outside_pts)[:4]
 
-                outside_bottom = intersect_lines(
-                    outside_line,
-                    bottom_line
-                )
+                        outside_top = intersect_lines(
+                            outside_line,
+                            top_line
+                        )
 
-            else:
-                if DEBUG:
-                    print(f"line 680: scale_y={scale_y} target_h={target_h} page_height={page_height} -> not scaling height")
+                        outside_bottom = intersect_lines(
+                            outside_line,
+                            bottom_line
+                        )
+
+                    else:
+                        if DEBUG:
+                            print(
+                                "line 680:",
+                                f"scale_x={scale_x}",
+                                "-> not scaling width"
+                            )
+
 
         expected_h = int(round(page_height))
 
@@ -1125,6 +1239,7 @@ def main():
         # page_num = int(m.group(1)) if m else 0
         page_num = int(m.group(1)) # can throw
         # if page_num != 14: continue # debug
+        if not page_num in (1, 2, 12, 13): continue # debug
         # if not page_num in [340, 345]: continue # debug
         # if page_num < 300: continue # debug
         # if page_num != 320: continue # debug
