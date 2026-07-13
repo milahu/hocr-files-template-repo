@@ -403,88 +403,76 @@ EDGE_LEFT = 2
 EDGE_RIGHT = 3
 
 
-def detect_edge_points(gray, mask, edge, margin):
+def detect_edge_points(gray, mask, edge, search_size):
     h, w = mask.shape
     pts = []
 
     if edge == EDGE_TOP:
-        y_max = min(margin, h)
+        y_max = min(search_size, h)
         for x in range(w):
+            # TODO why 255
             ys = np.where(mask[:y_max, x] == 255)[0]
             if len(ys):
                 pts.append((x, ys[0]))
 
-        # Transition verification
-        #
-        # The first white pixel isn't always the page.
-        # It might be dust, glare, or text sticking out.
-        #
-        # Keep only points that actually separate gray background
-        # from the white page.
-        pts = verify_horizontal(
-            gray,
-            # pts,
-            np.asarray(pts, np.float32),
-            top_edge=True
-        )
-
     elif edge == EDGE_BOTTOM:
-        y_min = max(0, h - margin)
+        y_min = max(0, h - search_size)
         for x in range(w):
             ys = np.where(mask[y_min:, x] == 255)[0]
             if len(ys):
                 pts.append((x, y_min + ys[-1]))
 
-        # Transition verification
-        pts = verify_horizontal(
-            gray,
-            # pts,
-            np.asarray(pts, np.float32),
-            top_edge=False
-        )
-
     elif edge == EDGE_LEFT:
-        x_max = min(margin, w)
+        x_max = min(search_size, w)
         for y in range(h):
             xs = np.where(mask[y, :x_max] == 255)[0]
             if len(xs):
                 pts.append((xs[0], y))
 
-        # Transition verification
-        pts = verify_vertical(
-            gray,
-            # pts,
-            np.asarray(pts, np.float32),
-            right_edge=False
-        )
-
-    elif edge == EDGE_RIGHT:
-        x_min = max(0, w - margin)
+    # elif edge == EDGE_RIGHT:
+    else:
+        x_min = max(0, w - search_size)
         for y in range(h):
             xs = np.where(mask[y, x_min:] == 255)[0]
             if len(xs):
                 pts.append((x_min + xs[-1], y))
 
-        # Transition verification
-        pts = verify_vertical(
-            gray,
-            # pts,
-            np.asarray(pts, np.float32),
-            right_edge=True
-        )
+    pts = np.asarray(pts, np.float32)
 
-    return np.asarray(pts, np.float32)
+    # Transition verification
+    #
+    # The first white pixel isn't always the page.
+    # It might be dust, glare, or text sticking out.
+    #
+    # Keep only points that actually separate gray background
+    # from the white page.
+    pts = verify_transition(
+        gray,
+        pts,
+        edge,
+    )
+
+    return pts
 
 
-# def is_vertical_transition(gray, x, y):
+def verify_transition(gray, points, edge):
+    if len(points) == 0:
+        return np.empty((0,2), dtype=np.float32)
 
-#     if x < 3 or x >= gray.shape[1]-3:
-#         return False
+    # TODO actually refactor verify_horizontal and verify_vertical
 
-#     left = np.mean(gray[y, x-3:x])
-#     right = np.mean(gray[y, x:x+3])
+    if edge == EDGE_TOP:
+        return verify_horizontal(gray, points, top_edge=True)
 
-#     return abs(left-right) > 40
+    elif edge == EDGE_BOTTOM:
+        return verify_horizontal(gray, points, top_edge=False)
+
+    elif edge == EDGE_LEFT:
+        return verify_vertical(gray, points, right_edge=False)
+
+    # elif edge == EDGE_RIGHT:
+    else:
+        return verify_vertical(gray, points, right_edge=True)
 
 
 def verify_horizontal(gray, points, top_edge):
@@ -591,15 +579,9 @@ def reject_outliers_vertical(pts, tolerance=40):
     return pts[np.abs(xs - median) < tolerance]
 
 
-def process_image(in_path, out_path):
-    """
-    Robust page extraction that handles missing top (or bottom) edges.
-    - preserves original colors (warps the original image)
-    - builds orthogonal axes (no shear)
-    - if top is missing, uses bottom + good vertical to infer top by moving up expected_h
-    - fills outside the filled page polygon with pure white
-    - extensive debug output in OUTPUT_DIR/debug/<page_num>/
-    """
+# TODO dedent
+# these were part of "def process_image"
+if 1:
     # ---------- small helpers ----------
     def ensure_dir(p):
         os.makedirs(p, exist_ok=True)
@@ -684,7 +666,20 @@ def process_image(in_path, out_path):
         yi = y1 + t1 * vy1
         return float(xi), float(yi)
 
+
+def process_image(in_path, out_path):
+    """
+    Robust page extraction that handles missing top (or bottom) edges.
+    - preserves original colors (warps the original image)
+    - builds orthogonal axes (no shear)
+    - if top is missing, uses bottom + good vertical to infer top by moving up expected_h
+    - fills outside the filled page polygon with pure white
+    - extensive debug output in OUTPUT_DIR/debug/<page_num>/
+    """
     # ---------- start ----------
+
+    # 1. load image
+
     fname = os.path.basename(in_path)
     m = re.match(r"^(\d+)", fname)
     page_num = int(m.group(1)) if m else 0
@@ -710,15 +705,17 @@ def process_image(in_path, out_path):
 
 
 
+    # 2. calculate search margins
+
     # Compute the expected ranges of margins
     # NOTE the scanner removes the "scan top" margin
     # so in the X direction, we have only one margin
     # so here we divide by 4, not by 2
-    margin_range_x_mm = (
+    edge_search_width_mm = (
         config.rotated_margined_scan_x -
         config.rotated_scan_x
     ) / 4.0
-    margin_range_y_mm = (
+    edge_search_height_mm = (
         config.rotated_margined_scan_y -
         config.rotated_scan_y
     ) / 2.0
@@ -726,15 +723,15 @@ def process_image(in_path, out_path):
     if DEBUG:
         print(f"config.rotated_margined_scan: ({config.rotated_margined_scan_x}, {config.rotated_margined_scan_y}) mm")
         print(f"config.rotated_scan: ({config.rotated_scan_x}, {config.rotated_scan_y}) mm")
-        print(f"margin_range: ({margin_range_x_mm}, {margin_range_y_mm}) mm")
+        print(f"margin_range: ({edge_search_width_mm}, {edge_search_height_mm}) mm")
 
     # Convert them to pixels
-    margin_range_x_px = px_of_mm(
-        margin_range_x_mm,
+    edge_search_width_px = px_of_mm(
+        edge_search_width_mm,
         config.scan_resolution
     )
-    margin_range_y_px = px_of_mm(
-        margin_range_y_mm,
+    edge_search_height_px = px_of_mm(
+        edge_search_height_mm,
         config.scan_resolution
     )
 
@@ -746,25 +743,29 @@ def process_image(in_path, out_path):
     SEARCH_MARGIN_FACTOR = 1.2
     SEARCH_MARGIN_ADD_MM = 2
 
+    # debug: dont increase
     # SEARCH_MARGIN_FACTOR = 1; SEARCH_MARGIN_ADD_MM = 0
 
     # Then enlarge them
-    margin_range_x_px *= SEARCH_MARGIN_FACTOR
-    margin_range_y_px *= SEARCH_MARGIN_FACTOR
+    edge_search_width_px *= SEARCH_MARGIN_FACTOR
+    edge_search_height_px *= SEARCH_MARGIN_FACTOR
     search_margin_add_px = px_of_mm(
         SEARCH_MARGIN_ADD_MM,
         config.scan_resolution
     )
-    margin_range_x_px += search_margin_add_px
-    margin_range_y_px += search_margin_add_px
+    edge_search_width_px += search_margin_add_px
+    edge_search_height_px += search_margin_add_px
 
     # we need integers for array indices
-    margin_range_x_px = int(math.ceil(margin_range_x_px))
-    margin_range_y_px = int(math.ceil(margin_range_y_px))
+    edge_search_width_px = int(math.ceil(edge_search_width_px))
+    edge_search_height_px = int(math.ceil(edge_search_height_px))
 
 
+
+    # 3. build mask
 
     # Step 1: Segment page vs. gray background
+    # -> gray, mask
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -788,7 +789,6 @@ def process_image(in_path, out_path):
 
 
 
-    # TODO verify
     # TODO rename
     mask = page_mask
 
@@ -802,31 +802,33 @@ def process_image(in_path, out_path):
             gray,
             mask,
             EDGE_RIGHT,
-            margin_range_x_px,
+            edge_search_width_px,
         )
     else:
         outside_pts = detect_edge_points(
             gray,
             mask,
             EDGE_LEFT,
-            margin_range_x_px,
+            edge_search_width_px,
         )
 
     top_pts = detect_edge_points(
         gray,
         mask,
         EDGE_TOP,
-        margin_range_y_px,
+        edge_search_height_px,
     )
 
     bottom_pts = detect_edge_points(
         gray,
         mask,
         EDGE_BOTTOM,
-        margin_range_y_px,
+        edge_search_height_px,
     )
 
 
+
+    # 4. reject outliers
 
     # Step 4: Reject isolated outliers
     # Use a median filter before RANSAC.
@@ -837,11 +839,17 @@ def process_image(in_path, out_path):
 
 
 
+    # 5. fit lines
+
     # Step 5: RANSAC
 
     top_line = fit_line_ransac(top_pts)[:4]
     bottom_line = fit_line_ransac(bottom_pts)[:4]
     outside_line = fit_line_ransac(outside_pts)[:4]
+
+
+
+    # FIXME merge old code with new code
 
 
 
@@ -865,6 +873,10 @@ def process_image(in_path, out_path):
         # top_line = fit_line_ransac(top_pts)[:4]
         # bottom_line = fit_line_ransac(bottom_pts)[:4]
         # outside_line = fit_line_ransac(outside_pts)[:4]
+
+
+
+        # 6. rotate
 
         # old
         # top_angle = math.degrees(line_angle(top_line))
@@ -942,6 +954,8 @@ def process_image(in_path, out_path):
 
 
 
+        # 7. rescale
+
         top_pts, bottom_pts, outside_pts = split_edge_candidates(
             page_contour,
             bad_on_left
@@ -988,226 +1002,8 @@ def process_image(in_path, out_path):
         if 0:
             if config.do_rotate == False:
                 # fix scan height
-                # document scanners can distort scans in the Y direction
-                # FIXME honor config.do_rotate
-                # if (config.do_rotate == True)
-                # then all pages are rotated by 90 or 270 degrees
-                # so the scanner's Y errors become our X errors
-                # so we need scale_x to fix the page width
-                if 0:
-                    # use rotated_scan_y and page_height
-                    rotated_scan_y_px = px_of_mm(config.rotated_scan_y, config.scan_resolution)
-                    target_h = rotated_scan_y_px
-                    scale_y = target_h / page_height
-                elif 1:
-                    # use rotated_margined_scan_y and H_img
-                    rotated_margined_scan_y_px = px_of_mm(config.rotated_margined_scan_y, config.scan_resolution)
-                    target_h = rotated_margined_scan_y_px
-                    scale_y = target_h / H_img
-                else:
-                    # no, this fails because the scanner removes one edge
-                    # so actual_aspect is always wrong...
-                    #
-                    # use rotated_margined_scan_y and H_img
-                    # expected: what we ordered from the scanner
-                    expected_aspect = (
-                        config.rotated_margined_scan_x /
-                        config.rotated_margined_scan_y
-                    )
-                    expected_height = config.rotated_margined_scan_y
-                    # actual: what the scanner gave us
-                    actual_aspect = W_img / H_img
-                    actual_height = H_img
-                    # we assume the scanner always returns correct X coordinates
-                    # and all errors are only in Y coordinates
-                    # expected_aspect / actual_aspect = actual_height / expected_height
-                    actual_height_2 = expected_aspect / actual_aspect / expected_height
-                    expected_aspect_factor = expected_aspect / actual_aspect
-                    # the scale of actual_height relative to actual_height_2
-                    actual_height_scale = actual_height / actual_height_2
-                    if DEBUG:
-                        print(f"expected_aspect={expected_aspect} actual_aspect={actual_aspect} expected_aspect_factor={expected_aspect_factor}")
-                        print(f"expected_height={expected_height} actual_height={actual_height} actual_height_2={actual_height_2} actual_height_scale={actual_height_scale}")
-                    target_h = actual_height_2
-                    scale_y = target_h / H_img
-
-                # debug: manually set the scale_y factor
-                # scale_y = 1 / 1.03 # shrink the page height by 3%
-
-                scale_y_tolerance = 0.001 # 0.1%
-
-                if scale_y < (1 - scale_y_tolerance) or (1 + scale_y_tolerance) < scale_y:
-                    if DEBUG:
-                        print(f"line 680: scale_y={scale_y} target_h={target_h} page_height={page_height} -> scaling height")
-                    rotated = cv2.resize(
-                        rotated,
-                        None,
-                        fx=1.0,
-                        fy=scale_y,
-                        interpolation=cv2.INTER_CUBIC
-                    )
-                    page_height = page_height * scale_y
-
-                    # re-detect lines in the scaled image
-
-                    # gray, mask, contours = get_gray_mask_contours(img, dbgdir)
-                    gray, mask, contours = get_gray_mask_contours(rotated, dbgdir)
-
-                    if 1:
-                        top_angle2 = horizontal_line_angle(top_line)
-                        bottom_angle2 = horizontal_line_angle(bottom_line)
-                        outside_angle2 = vertical_line_angle(outside_line)
-                        if DEBUG:
-                            print(
-                                f"line 620: after rotation and re-fitting: "
-                                f"top_angle2={top_angle2:.3f} "
-                                f"bottom_angle2={bottom_angle2:.3f} "
-                                f"outside_angle2={outside_angle2:.3f}"
-                            )
-
-                    if not contours:
-                        print(f"line 630: Warning: no contours found in {in_path}")
-                        return
-
-                    page_contour = max(contours, key=cv2.contourArea)
-
-                    top_pts, bottom_pts, outside_pts = split_edge_candidates(
-                        page_contour,
-                        bad_on_left
-                    )
-
-                    top_line = fit_line_ransac(top_pts)[:4]
-                    bottom_line = fit_line_ransac(bottom_pts)[:4]
-                    outside_line = fit_line_ransac(outside_pts)[:4]
-
-                    # fixed
-                    # # FIXME H_img is wrong
-                    # expected_h = H_img
-                    # expected_w = int(round(ASPECT * expected_h))
-
-                    vx, vy, x0, y0 = outside_line
-
-                    outside_top = intersect_lines(
-                        outside_line,
-                        top_line
-                    )
-
-                    outside_bottom = intersect_lines(
-                        outside_line,
-                        bottom_line
-                    )
-
-                else:
-                    if DEBUG:
-                        print(f"line 680: scale_y={scale_y} target_h={target_h} page_height={page_height} -> not scaling height")
-
-            else:
-                # config.do_rotate == True
-                # fix scan width
-                # Raw scans are rotated by 90/270 degrees.
-                # Therefore: scanner Y errors -> image X errors
-                # We must correct width (scale_x), not height (scale_y).
-                if 1:
-                    # The detected outside edge gives us the real page height
-                    # in image coordinates.  After rotation this corresponds to
-                    # scanner X, which is assumed correct.
-                    #
-                    # The missing/damaged dimension is the page width.
-
-                    rotated_margined_scan_x_px = px_of_mm(
-                        config.rotated_margined_scan_x,
-                        config.scan_resolution
-                    )
-
-                    target_w = rotated_margined_scan_x_px
-
-                    actual_w = math.dist(
-                        outside_top,
-                        outside_bottom
-                    )
-
-                    # This is actually the width in scanner coordinates because
-                    # the document is rotated.
-                    scale_x = target_w / actual_w
-
-                    scale_x_tolerance = 0.001  # 0.1%
-
-                    if (
-                        scale_x < (1 - scale_x_tolerance)
-                        or
-                        scale_x > (1 + scale_x_tolerance)
-                    ):
-                        if DEBUG:
-                            print(
-                                "line 680:",
-                                f"scale_x={scale_x}",
-                                f"target_w={target_w}",
-                                f"actual_w={actual_w}",
-                                "-> scaling width"
-                            )
-
-                        rotated = cv2.resize(
-                            rotated,
-                            None,
-                            fx=scale_x,
-                            fy=1.0,
-                            interpolation=cv2.INTER_CUBIC
-                        )
-
-                        # Update image size
-                        Hr, Wr = rotated.shape[:2]
-
-                        if DEBUG:
-                            print(
-                                "line 690: after scale_x",
-                                f"Wr={Wr}",
-                                f"Hr={Hr}"
-                            )
-
-                        # Re-detect page after scaling
-                        gray, mask, contours = get_gray_mask_contours(
-                            rotated,
-                            dbgdir
-                        )
-
-                        if not contours:
-                            print(
-                                f"line 700: Warning: no contours found after scaling {in_path}"
-                            )
-                            return
-
-                        page_contour = max(
-                            contours,
-                            key=cv2.contourArea
-                        )
-
-                        top_pts, bottom_pts, outside_pts = split_edge_candidates(
-                            page_contour,
-                            bad_on_left
-                        )
-
-                        top_line = fit_line_ransac(top_pts)[:4]
-                        bottom_line = fit_line_ransac(bottom_pts)[:4]
-                        outside_line = fit_line_ransac(outside_pts)[:4]
-
-                        outside_top = intersect_lines(
-                            outside_line,
-                            top_line
-                        )
-
-                        outside_bottom = intersect_lines(
-                            outside_line,
-                            bottom_line
-                        )
-
-                    else:
-                        if DEBUG:
-                            print(
-                                "line 680:",
-                                f"scale_x={scale_x}",
-                                "-> not scaling width"
-                            )
-
+                # ...
+                pass
 
         expected_h = int(round(page_height))
 
@@ -1217,6 +1013,10 @@ def process_image(in_path, out_path):
         # expand the binding edge to expected_w
         # expected_w = int(round(expected_h * ASPECT))
         expected_w = int(round(page_height * ASPECT))
+
+
+
+        # 8. perspective transform
 
         if 0:
             # crop as a rectangle
@@ -1427,19 +1227,19 @@ def process_image(in_path, out_path):
                     # outside edge is right
                     # no line on the left
                     pts = np.array([
-                        [0, margin_range_y_px], # top left
-                        [W_img - margin_range_x_px, margin_range_y_px], # top right
-                        [W_img - margin_range_x_px, H_img - margin_range_y_px], # bottom right
-                        [0, H_img - margin_range_y_px], # bottom left
+                        [0, edge_search_height_px], # top left
+                        [W_img - edge_search_width_px, edge_search_height_px], # top right
+                        [W_img - edge_search_width_px, H_img - edge_search_height_px], # bottom right
+                        [0, H_img - edge_search_height_px], # bottom left
                     ], np.int32)
                 else:
                     # outside edge is left
                     # no line on the right
                     pts = np.array([
-                        [W_img, margin_range_y_px], # top right
-                        [margin_range_x_px, margin_range_y_px], # top left
-                        [margin_range_x_px, H_img - margin_range_y_px], # bottom left
-                        [W_img, H_img - margin_range_y_px], # bottom right
+                        [W_img, edge_search_height_px], # top right
+                        [edge_search_width_px, edge_search_height_px], # top left
+                        [edge_search_width_px, H_img - edge_search_height_px], # bottom left
+                        [W_img, H_img - edge_search_height_px], # bottom right
                     ], np.int32)
                 cv2.polylines(vis, [pts], False, (0,255,0), 3) # (0,255,0) == green?
                 # page margin: red
@@ -1575,6 +1375,10 @@ def process_image(in_path, out_path):
         canvas[h-b:h, :, :] = avg_color_strip(canvas, 'bottom', 50, 100)  # bottom border
         canvas[:, 0:b, :] = avg_color_strip(canvas, 'left', 50, 100)      # left border
         canvas[:, w-b:w, :] = avg_color_strip(canvas, 'right', 50, 100)   # right border
+
+
+
+    # 9. save
 
     if input_is_grayscale:
         canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
