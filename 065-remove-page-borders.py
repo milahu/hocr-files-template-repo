@@ -12,7 +12,7 @@ OUTPUT_DIR = "065-remove-page-borders"
 
 # === Tuning parameters ===
 DEBUG = True
-# DEBUG = False
+DEBUG = False
 BORDER_SIZE = 100  # pixels
 
 RANSAC_ITER = 400
@@ -1068,6 +1068,31 @@ def process_image(in_path, out_path):
         bottom_pts = reject_outliers_horizontal(bottom_pts)
         outside_pts = reject_outliers_vertical(outside_pts)
 
+        if DEBUG:
+            vis = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+            # margin range: green
+            if bad_on_left:
+                # outside edge is right
+                # no line on the left
+                pts = np.array([
+                    [0, edge_search_height_px], # top left
+                    [Wr - edge_search_width_px, edge_search_height_px], # top right
+                    [Wr - edge_search_width_px, Hr - edge_search_height_px], # bottom right
+                    [0, Hr - edge_search_height_px], # bottom left
+                ], np.int32)
+            else:
+                # outside edge is left
+                # no line on the right
+                pts = np.array([
+                    [Wr, edge_search_height_px], # top right
+                    [edge_search_width_px, edge_search_height_px], # top left
+                    [edge_search_width_px, Hr - edge_search_height_px], # bottom left
+                    [Wr, Hr - edge_search_height_px], # bottom right
+                ], np.int32)
+            for x, y in outside_pts.astype(int):
+                cv2.circle(vis, (x, y), 2, (0, 0, 255), -1)
+            cv2.imwrite(f"{page_num:03d}.outside_pts.reject_outliers_vertical.jpg", vis)
+
         top_line = fit_line_ransac(top_pts)[:4]
         bottom_line = fit_line_ransac(bottom_pts)[:4]
         outside_line = fit_line_ransac(outside_pts)[:4]
@@ -1119,16 +1144,22 @@ def process_image(in_path, out_path):
                 # outside edge is right
                 x1_top = outside_top[0]
                 x1_bottom = outside_bottom[0]
+                # binding edge
                 # find leftmost detected page boundary
-                x0_top = np.min(top_pts[:,0])
-                x0_bottom = np.min(bottom_pts[:,0])
+                # x0_top = np.min(top_pts[:,0])
+                # x0_bottom = np.min(bottom_pts[:,0])
+                x0_top = 0
+                x0_bottom = 0
             else:
                 # outside edge is left
                 x0_top = outside_top[0]
                 x0_bottom = outside_bottom[0]
+                # binding edge
                 # find rightmost detected page boundary
-                x1_top = np.max(top_pts[:,0])
-                x1_bottom = np.max(bottom_pts[:,0])
+                # x1_top = np.max(top_pts[:,0])
+                # x1_bottom = np.max(bottom_pts[:,0])
+                x1_top = Wr - 1
+                x1_bottom = Wr - 1
 
             # dont expand the binding edge to expected_w
             expected_w = int(round(
@@ -1182,9 +1213,9 @@ def process_image(in_path, out_path):
                 # no line on the left
                 pts = np.array([
                     [0, edge_search_height_px], # top left
-                    [W_img - edge_search_width_px, edge_search_height_px], # top right
-                    [W_img - edge_search_width_px, H_img - edge_search_height_px], # bottom right
-                    [0, H_img - edge_search_height_px], # bottom left
+                    [Wr - edge_search_width_px, edge_search_height_px], # top right
+                    [Wr - edge_search_width_px, Hr - edge_search_height_px], # bottom right
+                    [0, Hr - edge_search_height_px], # bottom left
                 ], np.int32)
             else:
                 # outside edge is left
@@ -1355,7 +1386,7 @@ def main():
         # page_num = int(m.group(1)) if m else 0
         page_num = int(m.group(1)) # can throw
         # if page_num != 14: continue # debug
-        if not page_num in (1, 2, 12, 13): continue # debug
+        # if not page_num in (1, 2, 12, 13): continue # debug
         # if not page_num in [340, 345]: continue # debug
         # if page_num < 300: continue # debug
         # if page_num != 320: continue # debug
