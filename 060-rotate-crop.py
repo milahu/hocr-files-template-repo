@@ -20,7 +20,7 @@ from _shared import (
 
 # --- Setup -------------------------------------------------------------------
 os.chdir(Path(__file__).resolve().parent)
-src = Path("046-compress")
+src = Path("045-crop-scan-area")
 dst = Path(Path(__file__).stem)
 dst.mkdir(parents=True, exist_ok=True)
 

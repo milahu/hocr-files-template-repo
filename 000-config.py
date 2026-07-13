@@ -44,6 +44,7 @@ scan_margin = 10
 scan_resolution = 600
 # scan_resolution = 1200
 
+# uncompressed image format
 # no. JPEG quality is too low (below 95%) and not configurable
 # scan_format = "jpg"
 # no. PNG compression is too slow
@@ -52,7 +53,8 @@ scan_resolution = 600
 # scan_format = "pnm"
 scan_format = "tiff"
 
-# for 046-compress.py etc
+# compressed image format
+# for 062-compress.py
 image_format = "jpg"
 
 
