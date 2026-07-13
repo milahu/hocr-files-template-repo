@@ -53,6 +53,33 @@ scan_resolution = 600
 # scan_format = "pnm"
 scan_format = "tiff"
 
+import cv2
+
+cv2_imwrite_params = [
+    # disable compression in TIFF container (lossless)
+    # done 480 pages in 150 seconds using 6 workers
+    # 24825889728     060-rotate-crop # 100%
+    # cv2.IMWRITE_TIFF_COMPRESSION, cv2.IMWRITE_TIFF_COMPRESSION_NONE,
+
+    # default: use LZW compression in TIFF container (lossless)
+    # done 480 pages in 111 seconds using 6 workers
+    # done 480 pages in 140 seconds using 6 workers
+    # 6948263236      060-rotate-crop # 28%
+    # cv2.IMWRITE_TIFF_COMPRESSION, cv2.IMWRITE_TIFF_COMPRESSION_LZW,
+
+    # default: use Deflate compression in TIFF container (lossless)
+    # done 480 pages in 120 seconds using 6 workers
+    # 5928015210      060-rotate-crop # 24%
+    cv2.IMWRITE_TIFF_COMPRESSION, cv2.IMWRITE_TIFF_COMPRESSION_ADOBE_DEFLATE,
+
+    # default: use ZSTD compression in TIFF container (lossless)
+    # done 480 pages in 130 seconds using 6 workers
+    # 5985643952      060-rotate-crop # 24%
+    # cv2.IMWRITE_TIFF_COMPRESSION, cv2.IMWRITE_TIFF_COMPRESSION_ZSTD,
+]
+
+
+
 # compressed image format
 # for 062-compress.py
 image_format = "jpg"

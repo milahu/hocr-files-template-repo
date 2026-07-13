@@ -100,7 +100,7 @@ def process_image(image_path: Path) -> str:
         img = img[y1:y2, x1:x2]
 
     # Save image
-    cv2.imwrite(str(output_path), img)
+    cv2.imwrite(str(output_path), img, config.cv2_imwrite_params)
     print(f"writing {output_path}")
 
 

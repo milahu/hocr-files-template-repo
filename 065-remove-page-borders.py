@@ -1369,7 +1369,7 @@ def process_image(in_path, out_path):
         canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
 
     ensure_dir(os.path.dirname(out_path))
-    cv2.imwrite(out_path, canvas)
+    cv2.imwrite(out_path, canvas, config.cv2_imwrite_params)
     print(f"writing {out_path}")
 
 
