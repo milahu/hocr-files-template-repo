@@ -153,7 +153,7 @@ def try_process_image(*args):
 # --- Parallel execution ------------------------------------------------------
 if __name__ == "__main__":
     t1 = time.time()
-    images = sorted(src.glob(f"*.{config.image_format}"))
+    images = sorted(src.glob(f"*.{config.scan_format}"))
     if not images:
         print("No input files found.")
         exit(0)
