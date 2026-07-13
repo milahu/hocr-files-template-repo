@@ -1,5 +1,24 @@
 #!/usr/bin/env python3
 
+# compress the scans for publishing
+#
+# this runs
+# - after 045-crop-scan-area.py
+# - after 060-rotate-crop.py
+# - before 065-remove-page-borders.py
+#
+# 045-crop-scan-area.py and 060-rotate-crop.py are simple and safe
+# so they should never make errors, except with a bad config
+#
+# 065-remove-page-borders.py is complex and risky
+# it can make errors
+# so these compressed scans (before 065-remove-page-borders.py)
+# serve as a backup in case some script fails later in the pipeline
+#
+# note: the scripts later in the pipeline
+# do not use these compressed scans
+# but they use the uncompressed scans (usually TIFF images)
+
 import os
 import re
 import shutil
