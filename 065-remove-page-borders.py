@@ -930,47 +930,47 @@ def process_image(in_path, out_path):
 
         # re-detect lines in the rotated image
 
-        # gray, mask, contours = get_gray_mask_contours(img, dbgdir)
-        gray, mask, contours = get_gray_mask_contours(rotated, dbgdir)
+        # # gray, mask, contours = get_gray_mask_contours(img, dbgdir)
+        # gray, mask, contours = get_gray_mask_contours(rotated, dbgdir)
 
-        if 1:
-            top_angle2 = horizontal_line_angle(top_line)
-            bottom_angle2 = horizontal_line_angle(bottom_line)
-            outside_angle2 = vertical_line_angle(outside_line)
+        # if 1:
+        #     top_angle2 = horizontal_line_angle(top_line)
+        #     bottom_angle2 = horizontal_line_angle(bottom_line)
+        #     outside_angle2 = vertical_line_angle(outside_line)
 
-            if DEBUG:
-                print(
-                    f"line 620: after rotation and re-fitting: "
-                    f"top_angle2={top_angle2:.3f} "
-                    f"bottom_angle2={bottom_angle2:.3f} "
-                    f"outside_angle2={outside_angle2:.3f}"
-                )
+        #     if DEBUG:
+        #         print(
+        #             f"line 620: after rotation and re-fitting: "
+        #             f"top_angle2={top_angle2:.3f} "
+        #             f"bottom_angle2={bottom_angle2:.3f} "
+        #             f"outside_angle2={outside_angle2:.3f}"
+        #         )
 
-        if not contours:
-            print(f"line 630: Warning: no contours found in {in_path}")
-            return
+        # if not contours:
+        #     print(f"line 630: Warning: no contours found in {in_path}")
+        #     return
 
-        page_contour = max(contours, key=cv2.contourArea)
+        # page_contour = max(contours, key=cv2.contourArea)
 
 
 
         # 7. rescale
 
-        top_pts, bottom_pts, outside_pts = split_edge_candidates(
-            page_contour,
-            bad_on_left
-        )
+        # top_pts, bottom_pts, outside_pts = split_edge_candidates(
+        #     page_contour,
+        #     bad_on_left
+        # )
 
-        top_line = fit_line_ransac(top_pts)[:4]
-        bottom_line = fit_line_ransac(bottom_pts)[:4]
-        outside_line = fit_line_ransac(outside_pts)[:4]
+        # top_line = fit_line_ransac(top_pts)[:4]
+        # bottom_line = fit_line_ransac(bottom_pts)[:4]
+        # outside_line = fit_line_ransac(outside_pts)[:4]
 
-        # fixed
-        # # FIXME H_img is wrong
-        # expected_h = H_img
-        # expected_w = int(round(ASPECT * expected_h))
+        # # fixed
+        # # # FIXME H_img is wrong
+        # # expected_h = H_img
+        # # expected_w = int(round(ASPECT * expected_h))
 
-        vx, vy, x0, y0 = outside_line
+        # vx, vy, x0, y0 = outside_line
 
         outside_top = intersect_lines(
             outside_line,
@@ -995,264 +995,218 @@ def process_image(in_path, out_path):
                 outside_bottom[1] - outside_top[1]
             )
 
-        # no. this fails to reconstruct the page height...
-        # TODO try to solve this with the average height of multiple pages
-        # assuming all pages must have the same height
-        # also allowing the user to specify a scale_y factor
-        if 0:
-            if config.do_rotate == False:
-                # fix scan height
-                # ...
-                pass
+        # # no. this fails to reconstruct the page height...
+        # # TODO try to solve this with the average height of multiple pages
+        # # assuming all pages must have the same height
+        # # also allowing the user to specify a scale_y factor
+        # if 0:
+        #     if config.do_rotate == False:
+        #         # fix scan height
+        #         # ...
+        #         pass
 
         expected_h = int(round(page_height))
 
-        # ASPECT = x / y
-        # x = y * ASPECT
+        # # ASPECT = x / y
+        # # x = y * ASPECT
 
-        # expand the binding edge to expected_w
-        # expected_w = int(round(expected_h * ASPECT))
-        expected_w = int(round(page_height * ASPECT))
+        # # expand the binding edge to expected_w
+        # # expected_w = int(round(expected_h * ASPECT))
+        # expected_w = int(round(page_height * ASPECT))
+
+
+
+        # After rotation
+        # Instead of ...
+        # # gray, mask, contours = get_gray_mask_contours(rotated, dbgdir)
+        # # page_contour = max(contours, key=cv2.contourArea)
+        # # top_pts, bottom_pts, outside_pts = split_edge_candidates(
+        # #     page_contour,
+        # #     bad_on_left
+        # # )
+        # I would literally do
+
+        gray = cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY)
+
+        _, mask = cv2.threshold(
+            gray,
+            0,
+            255,
+            cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )
+
+        if bad_on_left:
+            outside_pts = detect_edge_points(
+                gray,
+                mask,
+                EDGE_RIGHT,
+                edge_search_width_px,
+            )
+        else:
+            outside_pts = detect_edge_points(
+                gray,
+                mask,
+                EDGE_LEFT,
+                edge_search_width_px,
+            )
+
+        top_pts = detect_edge_points(
+            gray,
+            mask,
+            EDGE_TOP,
+            edge_search_height_px,
+        )
+
+        bottom_pts = detect_edge_points(
+            gray,
+            mask,
+            EDGE_BOTTOM,
+            edge_search_height_px,
+        )
+
+        top_pts = reject_outliers_horizontal(top_pts)
+        bottom_pts = reject_outliers_horizontal(bottom_pts)
+        outside_pts = reject_outliers_vertical(outside_pts)
+
+        top_line = fit_line_ransac(top_pts)[:4]
+        bottom_line = fit_line_ransac(bottom_pts)[:4]
+        outside_line = fit_line_ransac(outside_pts)[:4]
+
+        # ... Then the search margins are enforced both before and after rotation.
 
 
 
         # 8. perspective transform
 
+        # crop as a quadrilateral
+        # not better than "crop as a rectangle"?
         if 0:
-            # crop as a rectangle
-            x_out = (
-                outside_top[0]
-                +
-                outside_bottom[0]
-            ) / 2
-
-            x_out = int(round(x_out))
-
-            # if bad_on_left:
-            #     x0_page = x_out
-            #     x1_page = x_out + expected_w
-            # else:
-            #     x0_page = x_out - expected_w
-            #     x1_page = x_out
-
+            # expand the binding edge to expected_w
             if bad_on_left:
-                # outside edge is RIGHT
-                x1_page = x_out
-                x0_page = x_out - expected_w
+                # outside edge is the RIGHT edge
+                x1_top = outside_top[0]
+                x1_bottom = outside_bottom[0]
+                x0_top = x1_top - expected_w
+                x0_bottom = x1_bottom - expected_w
             else:
-                # outside edge is LEFT
-                x0_page = x_out
-                x1_page = x_out + expected_w
-
-            # clamp
-            # x0_page = max(0, x0_page)
-            # x1_page = min(rotated.shape[1], x1_page)
-
-            y_top = int(round(outside_top[1]))
-            y_bottom = int(round(outside_bottom[1]))
-
-            src_x0 = max(0, x0_page)
-            src_x1 = min(rotated.shape[1], x1_page)
-
-            src_y0 = max(0, y_top)
-            src_y1 = min(rotated.shape[0], y_top + expected_h)
-
-            dst_x0 = src_x0 - x0_page
-            dst_y0 = src_y0 - y_top
-
-            if DEBUG:
-                print(
-                    "line 640:",
-                    f"outside_top={outside_top}",
-                    f"outside_bottom={outside_bottom}",
-                )
-
-            # crop = rotated[
-            #     y_top:y_top+expected_h,
-            #     x0_page:x1_page
-            # ]
-
-            full_crop = np.ones(
-                (expected_h, expected_w, 3),
-                dtype=rotated.dtype
-            ) * 255
-
-            full_crop[
-                dst_y0:dst_y0 + (src_y1-src_y0),
-                dst_x0:dst_x0 + (src_x1-src_x0)
-            ] = rotated[
-                src_y0:src_y1,
-                src_x0:src_x1
-            ]
-
-            # FIXME fill empty area near binding edge
-            # currently it is all white
-            # but it should copy the vertical pattern near the binding edge
-
-            crop = full_crop
-
-            if DEBUG:
-                print(
-                    "line 650: crop",
-                    f"W_img={W_img}",
-                    f"H_img={H_img}",
-                    f"x0_page={x0_page}",
-                    f"x1_page={x1_page}",
-                    f"y_top={y_top}",
-                    f"y_bottom={y_bottom}",
-                    f"src_x0={src_x0}",
-                    f"src_x1={src_x1}",
-                    f"src_y0={src_y0}",
-                    f"src_y1={src_y1}",
-                    f"dst_x0={dst_x0}",
-                    f"dst_y0={dst_y0}",
-                    f"expected_w={expected_w}",
-                    f"expected_h={expected_h}",
-                )
-
-            if DEBUG:
-                vis = rotated.copy()
-                cv2.rectangle(
-                    vis,
-                    (int(x0_page), int(y_top)),
-                    (int(x1_page), int(y_bottom)),
-                    (0,0,255),
-                    3,
-                )
-                name = f"{page_num:03d}.crop_debug_rotated_line730.jpg"
-                print(f"writing {name}")
-                cv2.imwrite(name, vis)
-
+                # outside edge is the LEFT edge
+                x0_top = outside_top[0]
+                x0_bottom = outside_bottom[0]
+                x1_top = x0_top + expected_w
+                x1_bottom = x0_bottom + expected_w
         else:
-            # crop as a quadrilateral
-            # not better than "crop as a rectangle"?
-            if 0:
-                # expand the binding edge to expected_w
-                if bad_on_left:
-                    # outside edge is the RIGHT edge
-                    x1_top = outside_top[0]
-                    x1_bottom = outside_bottom[0]
-                    x0_top = x1_top - expected_w
-                    x0_bottom = x1_bottom - expected_w
-                else:
-                    # outside edge is the LEFT edge
-                    x0_top = outside_top[0]
-                    x0_bottom = outside_bottom[0]
-                    x1_top = x0_top + expected_w
-                    x1_bottom = x0_bottom + expected_w
+            # dont expand the binding edge to expected_w
+            # use only the detected page edges
+            # if bad_on_left:
+            #     # outside edge is RIGHT edge
+            #     x1_top = outside_top[0]
+            #     x1_bottom = outside_bottom[0]
+            #     # use the actual detected left edge
+            #     x0_top = np.min(page_contour[:,0,0])
+            #     x0_bottom = x0_top
+            # else:
+            #     # outside edge is LEFT edge
+            #     x0_top = outside_top[0]
+            #     x0_bottom = outside_bottom[0]
+            #     # use the actual detected right edge
+            #     x1_top = np.max(page_contour[:,0,0])
+            #     x1_bottom = x1_top
+            # problem: page_contour after thresholding may include the background
+            # or may not have a reliable missing-edge position.
+            # A cleaner temporary solution is to use the detected quadrilateral width
+            # from the two horizontal edge intersections
+            if bad_on_left:
+                # outside edge is right
+                x1_top = outside_top[0]
+                x1_bottom = outside_bottom[0]
+                # find leftmost detected page boundary
+                x0_top = np.min(top_pts[:,0])
+                x0_bottom = np.min(bottom_pts[:,0])
             else:
-                # dont expand the binding edge to expected_w
-                # use only the detected page edges
-                # if bad_on_left:
-                #     # outside edge is RIGHT edge
-                #     x1_top = outside_top[0]
-                #     x1_bottom = outside_bottom[0]
-                #     # use the actual detected left edge
-                #     x0_top = np.min(page_contour[:,0,0])
-                #     x0_bottom = x0_top
-                # else:
-                #     # outside edge is LEFT edge
-                #     x0_top = outside_top[0]
-                #     x0_bottom = outside_bottom[0]
-                #     # use the actual detected right edge
-                #     x1_top = np.max(page_contour[:,0,0])
-                #     x1_bottom = x1_top
-                # problem: page_contour after thresholding may include the background
-                # or may not have a reliable missing-edge position.
-                # A cleaner temporary solution is to use the detected quadrilateral width
-                # from the two horizontal edge intersections
-                if bad_on_left:
-                    # outside edge is right
-                    x1_top = outside_top[0]
-                    x1_bottom = outside_bottom[0]
-                    # find leftmost detected page boundary
-                    x0_top = np.min(top_pts[:,0])
-                    x0_bottom = np.min(bottom_pts[:,0])
-                else:
-                    # outside edge is left
-                    x0_top = outside_top[0]
-                    x0_bottom = outside_bottom[0]
-                    # find rightmost detected page boundary
-                    x1_top = np.max(top_pts[:,0])
-                    x1_bottom = np.max(bottom_pts[:,0])
+                # outside edge is left
+                x0_top = outside_top[0]
+                x0_bottom = outside_bottom[0]
+                # find rightmost detected page boundary
+                x1_top = np.max(top_pts[:,0])
+                x1_bottom = np.max(bottom_pts[:,0])
 
-                # dont expand the binding edge to expected_w
-                expected_w = int(round(
-                    math.dist((x0_top, outside_top[1]), (x1_top, outside_top[1]))
-                ))
+            # dont expand the binding edge to expected_w
+            expected_w = int(round(
+                math.dist((x0_top, outside_top[1]), (x1_top, outside_top[1]))
+            ))
 
 
-            src = np.float32([
+        src = np.float32([
+            [x0_top, outside_top[1]],
+            [x1_top, outside_top[1]],
+            [x1_bottom, outside_bottom[1]],
+            [x0_bottom, outside_bottom[1]],
+        ])
+
+        dst = np.float32([
+            [0,0],
+            [expected_w-1,0],
+            [expected_w-1,expected_h-1],
+            [0,expected_h-1],
+        ])
+
+        M = cv2.getPerspectiveTransform(src, dst)
+
+        crop = cv2.warpPerspective(
+            rotated,
+            M,
+            (expected_w, expected_h),
+            borderValue=(255,255,255)
+        )
+
+        if DEBUG:
+            print(
+                "line 650: crop",
+                f"W_img={W_img}",
+                f"H_img={H_img}",
+                f"outside_top={outside_top}",
+                f"outside_bottom={outside_bottom}",
+                f"x1_top={x1_top}",
+                f"x1_bottom={x1_bottom}",
+                f"x0_top={x0_top}",
+                f"x0_bottom={x0_bottom}",
+                f"expected_w={expected_w}",
+                f"expected_h={expected_h}",
+            )
+
+        if DEBUG:
+            vis = rotated.copy()
+            # margin range: green
+            if bad_on_left:
+                # outside edge is right
+                # no line on the left
+                pts = np.array([
+                    [0, edge_search_height_px], # top left
+                    [W_img - edge_search_width_px, edge_search_height_px], # top right
+                    [W_img - edge_search_width_px, H_img - edge_search_height_px], # bottom right
+                    [0, H_img - edge_search_height_px], # bottom left
+                ], np.int32)
+            else:
+                # outside edge is left
+                # no line on the right
+                pts = np.array([
+                    [Wr, edge_search_height_px], # top right
+                    [edge_search_width_px, edge_search_height_px], # top left
+                    [edge_search_width_px, Hr - edge_search_height_px], # bottom left
+                    [Wr, Hr - edge_search_height_px], # bottom right
+                ], np.int32)
+            cv2.polylines(vis, [pts], False, (0,255,0), 3) # (0,255,0) == green?
+            # page margin: red
+            pts = np.array([
                 [x0_top, outside_top[1]],
                 [x1_top, outside_top[1]],
                 [x1_bottom, outside_bottom[1]],
                 [x0_bottom, outside_bottom[1]],
-            ])
-
-            dst = np.float32([
-                [0,0],
-                [expected_w-1,0],
-                [expected_w-1,expected_h-1],
-                [0,expected_h-1],
-            ])
-
-            M = cv2.getPerspectiveTransform(src, dst)
-
-            crop = cv2.warpPerspective(
-                rotated,
-                M,
-                (expected_w, expected_h),
-                borderValue=(255,255,255)
-            )
-
-            if DEBUG:
-                print(
-                    "line 650: crop",
-                    f"W_img={W_img}",
-                    f"H_img={H_img}",
-                    f"outside_top={outside_top}",
-                    f"outside_bottom={outside_bottom}",
-                    f"x1_top={x1_top}",
-                    f"x1_bottom={x1_bottom}",
-                    f"x0_top={x0_top}",
-                    f"x0_bottom={x0_bottom}",
-                    f"expected_w={expected_w}",
-                    f"expected_h={expected_h}",
-                )
-
-            if DEBUG:
-                vis = rotated.copy()
-                # margin range: green
-                if bad_on_left:
-                    # outside edge is right
-                    # no line on the left
-                    pts = np.array([
-                        [0, edge_search_height_px], # top left
-                        [W_img - edge_search_width_px, edge_search_height_px], # top right
-                        [W_img - edge_search_width_px, H_img - edge_search_height_px], # bottom right
-                        [0, H_img - edge_search_height_px], # bottom left
-                    ], np.int32)
-                else:
-                    # outside edge is left
-                    # no line on the right
-                    pts = np.array([
-                        [W_img, edge_search_height_px], # top right
-                        [edge_search_width_px, edge_search_height_px], # top left
-                        [edge_search_width_px, H_img - edge_search_height_px], # bottom left
-                        [W_img, H_img - edge_search_height_px], # bottom right
-                    ], np.int32)
-                cv2.polylines(vis, [pts], False, (0,255,0), 3) # (0,255,0) == green?
-                # page margin: red
-                pts = np.array([
-                    [x0_top, outside_top[1]],
-                    [x1_top, outside_top[1]],
-                    [x1_bottom, outside_bottom[1]],
-                    [x0_bottom, outside_bottom[1]],
-                ], np.int32)
-                cv2.polylines(vis, [pts], True, (0,0,255), 3)
-                name = f"{page_num:03d}.crop_debug_rotated_line730.jpg"
-                print(f"writing {name}")
-                cv2.imwrite(name, vis)
+            ], np.int32)
+            cv2.polylines(vis, [pts], True, (0,0,255), 3)
+            name = f"{page_num:03d}.crop_debug_rotated_line730.jpg"
+            print(f"writing {name}")
+            cv2.imwrite(name, vis)
 
         # crop = rotated[
         #     0:expected_h,
@@ -1304,23 +1258,23 @@ def process_image(in_path, out_path):
 
         # FIXME use only two page edges: outside, bottom
 
-        # Approximate contour to quadrilateral
-        epsilon = 0.02 * cv2.arcLength(page_contour, True)
-        approx = cv2.approxPolyDP(page_contour, epsilon, True)
-        if len(approx) != 4:
-            approx = cv2.convexHull(page_contour)
-            if len(approx) < 4:
-                print(f"Warning: not enough points for perspective in {in_path}")
-                return
-            # pick 4 extreme points
-            pts = np.array([
-                approx[approx[:,0,0].argmin()][0],  # leftmost
-                approx[approx[:,0,1].argmin()][0],  # topmost
-                approx[approx[:,0,0].argmax()][0],  # rightmost
-                approx[approx[:,0,1].argmax()][0]   # bottommost
-            ])
-        else:
-            pts = approx.reshape(4,2)
+        # # Approximate contour to quadrilateral
+        # epsilon = 0.02 * cv2.arcLength(page_contour, True)
+        # approx = cv2.approxPolyDP(page_contour, epsilon, True)
+        # if len(approx) != 4:
+        #     approx = cv2.convexHull(page_contour)
+        #     if len(approx) < 4:
+        #         print(f"Warning: not enough points for perspective in {in_path}")
+        #         return
+        #     # pick 4 extreme points
+        #     pts = np.array([
+        #         approx[approx[:,0,0].argmin()][0],  # leftmost
+        #         approx[approx[:,0,1].argmin()][0],  # topmost
+        #         approx[approx[:,0,0].argmax()][0],  # rightmost
+        #         approx[approx[:,0,1].argmax()][0]   # bottommost
+        #     ])
+        # else:
+        #     pts = approx.reshape(4,2)
 
         rect = order_points(pts)
 
