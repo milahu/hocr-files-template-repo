@@ -397,6 +397,176 @@ def px_of_mm(mm, dpi):
     return mm * dpi / 25.4
 
 
+def detect_top_points(mask):
+    h, w = mask.shape
+    pts = []
+    for x in range(w):
+        col = mask[:, x]
+        ys = np.where(col == 255)[0]
+        if len(ys) == 0:
+            continue
+        y = ys[0]
+        pts.append((x, y))
+    return np.asarray(pts, np.float32)
+
+
+def detect_bottom_points(mask):
+    h, w = mask.shape
+    pts = []
+    for x in range(w):
+        col = mask[:, x]
+        ys = np.where(col == 255)[0]
+        if len(ys) == 0:
+            continue
+        y = ys[-1]
+        pts.append((x, y))
+    return np.asarray(pts, np.float32)
+
+
+def detect_left_points(mask):
+    h, w = mask.shape
+    pts = []
+    for y in range(h):
+        row = mask[y]
+        xs = np.where(row == 255)[0]
+        if len(xs) == 0:
+            continue
+        pts.append((xs[0], y))
+    return np.asarray(pts, np.float32)
+
+
+def detect_right_points(mask):
+    h, w = mask.shape
+    pts = []
+    for y in range(h):
+        row = mask[y]
+        xs = np.where(row == 255)[0]
+        if len(xs) == 0:
+            continue
+        pts.append((xs[-1], y))
+    return np.asarray(pts, np.float32)
+
+
+def detect_edge_points(mask, direction):
+    pass
+    # TODO refactor detect_top_points etc
+
+
+# def is_vertical_transition(gray, x, y):
+
+#     if x < 3 or x >= gray.shape[1]-3:
+#         return False
+
+#     left = np.mean(gray[y, x-3:x])
+#     right = np.mean(gray[y, x:x+3])
+
+#     return abs(left-right) > 40
+
+
+def verify_horizontal(gray, points, top_edge):
+    good = []
+
+    H, W = gray.shape
+
+    for x, y in points.astype(int):
+
+        if y < 3 or y >= H-3:
+            continue
+
+        if top_edge:
+            outside = np.mean(gray[y-3:y, x])
+            inside  = np.mean(gray[y:y+3, x])
+        else:
+            outside = np.mean(gray[y:y+3, x])
+            inside  = np.mean(gray[y-3:y, x])
+
+        r'''
+        # must have strong contrast
+        if abs(float(inside) - float(outside)) < 40:
+            continue
+        '''
+        r'''
+        # must have strong contrast
+        if top_edge:
+            if not is_horizontal_transition(gray, x, y):
+                continue
+        else:
+            if not is_vertical_transition(gray, x, y):
+                continue
+        '''
+        # background is always gray
+        # Require the outside to actually look like scanner background
+        BACKGROUND_MIN = 80
+        BACKGROUND_MAX = 180
+        if not (BACKGROUND_MIN <= outside <= BACKGROUND_MAX):
+            continue
+
+        # outside should be scanner gray
+        if not (60 < outside < 200):
+            continue
+
+        # inside should be brighter
+        if inside <= outside:
+            continue
+
+        good.append((x, y))
+
+    return np.asarray(good, np.float32)
+
+
+def verify_vertical(gray, points, right_edge):
+    good = []
+
+    H, W = gray.shape
+
+    for x, y in points.astype(int):
+
+        if x < 3 or x >= W-3:
+            continue
+
+        if right_edge:
+            outside = np.mean(gray[y, x:x+3])
+            inside  = np.mean(gray[y, x-3:x])
+        else:
+            outside = np.mean(gray[y, x-3:x])
+            inside  = np.mean(gray[y, x:x+3])
+
+        if abs(float(inside) - float(outside)) < 40:
+            continue
+
+        if not (60 < outside < 200):
+            continue
+
+        if inside <= outside:
+            continue
+
+        good.append((x, y))
+
+    return np.asarray(good, np.float32)
+
+
+# TODO refactor x/y
+
+def reject_outliers_horizontal(pts, tolerance=40):
+    if len(pts) == 0:
+        return pts
+
+    ys = pts[:,1]
+    median = np.median(ys)
+
+    return pts[np.abs(ys - median) < tolerance]
+
+
+def reject_outliers_vertical(pts, tolerance=40):
+    if len(pts) == 0:
+        return pts
+
+    xs = pts[:,0]
+    median = np.median(xs)
+
+    return pts[np.abs(xs - median) < tolerance]
+
+
 def process_image(in_path, out_path):
     """
     Robust page extraction that handles missing top (or bottom) edges.
@@ -514,24 +684,115 @@ def process_image(in_path, out_path):
     dbgdir = os.path.join(OUTPUT_DIR, "debug", f"{page_num:03d}")
     if DEBUG: ensure_dir(dbgdir)
 
-    gray, mask, contours = get_gray_mask_contours(img, dbgdir)
 
-    if not contours:
-        print(f"Warning: no contours found in {in_path}")
-        return
 
-    page_contour = max(contours, key=cv2.contourArea)
+    # Step 1: Segment page vs. gray background
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Otsu is usually sufficient here
+    _, page_mask = cv2.threshold(
+        gray,
+        0,
+        255,
+        cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )
+
+    # Page should be white
+    if np.mean(gray[page_mask == 255]) < np.mean(gray[page_mask == 0]):
+        page_mask = cv2.bitwise_not(page_mask)
+
+    page_mask = cv2.morphologyEx(
+        page_mask,
+        cv2.MORPH_CLOSE,
+        np.ones((5,5), np.uint8)
+    )
+
+
+
+    # TODO verify
+    # TODO rename
+    mask = page_mask
+
+
+
+    # Step 2: Scan for transitions
+
+    if bad_on_left:
+        outside_pts = detect_right_points(mask)
+    else:
+        outside_pts = detect_left_points(mask)
+
+    top_pts = detect_top_points(mask)
+    bottom_pts = detect_bottom_points(mask)
+
+
+
+    # Step 3: Transition verification
+    #
+    # The first white pixel isn't always the page.
+    # It might be dust, glare, or text sticking out.
+    #
+    # Keep only points that actually separate gray background
+    # from the white page.
+
+    top_pts = verify_horizontal(
+        gray,
+        top_pts,
+        top_edge=True
+    )
+
+    bottom_pts = verify_horizontal(
+        gray,
+        bottom_pts,
+        top_edge=False
+    )
+
+    outside_pts = verify_vertical(
+        gray,
+        outside_pts,
+        right_edge=bad_on_left
+    )
+
+
+
+    # Step 4: Reject isolated outliers
+    # Use a median filter before RANSAC.
+
+    top_pts = reject_outliers_horizontal(top_pts)
+    bottom_pts = reject_outliers_horizontal(bottom_pts)
+    outside_pts = reject_outliers_vertical(outside_pts)
+
+
+
+    # Step 5: RANSAC
+
+    top_line = fit_line_ransac(top_pts)[:4]
+    bottom_line = fit_line_ransac(bottom_pts)[:4]
+    outside_line = fit_line_ransac(outside_pts)[:4]
+
+
+
+    # # TODO remove
+
+    # gray, mask, contours = get_gray_mask_contours(img, dbgdir)
+
+    # if not contours:
+    #     print(f"Warning: no contours found in {in_path}")
+    #     return
+
+    # page_contour = max(contours, key=cv2.contourArea)
 
     if config.use_three_edge_deskew:
 
-        top_pts, bottom_pts, outside_pts = split_edge_candidates(
-            page_contour,
-            bad_on_left
-        )
+        # top_pts, bottom_pts, outside_pts = split_edge_candidates(
+        #     page_contour,
+        #     bad_on_left
+        # )
 
-        top_line = fit_line_ransac(top_pts)[:4]
-        bottom_line = fit_line_ransac(bottom_pts)[:4]
-        outside_line = fit_line_ransac(outside_pts)[:4]
+        # top_line = fit_line_ransac(top_pts)[:4]
+        # bottom_line = fit_line_ransac(bottom_pts)[:4]
+        # outside_line = fit_line_ransac(outside_pts)[:4]
 
         # old
         # top_angle = math.degrees(line_angle(top_line))
@@ -1145,7 +1406,11 @@ def process_image(in_path, out_path):
 
     else:
         # config.use_three_edge_deskew == False
+
+        raise NotImplementedError("sorry, your book is too tall for your scanner...")
+
         # FIXME use only two page edges: outside, bottom
+
         # Approximate contour to quadrilateral
         epsilon = 0.02 * cv2.arcLength(page_contour, True)
         approx = cv2.approxPolyDP(page_contour, epsilon, True)
