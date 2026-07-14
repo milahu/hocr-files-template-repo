@@ -797,6 +797,17 @@ def process_image(in_path, out_path):
     # Step 2: Scan for transitions
     # Step 3: Transition verification
 
+    # NOTE we ignore inside_pts because
+    # - guillotine cutter can produce non-orthogonal inside edge of the book
+    # - document scanner does remove the top edge of the scan
+    # if config.do_rotate is True then
+    # "inside edge of the book" == "top edge of the scan"
+    #
+    # this also means:
+    # the widths of the top and bottom edges
+    # must have no influence on the deskew step
+    # (deskew = Rotation + Perspective transform)
+
     if bad_on_left:
         outside_pts = detect_edge_points(
             gray,
@@ -877,6 +888,7 @@ def process_image(in_path, out_path):
 
 
         # 6. rotate
+        # deskew part 1
 
         # old
         # top_angle = math.degrees(line_angle(top_line))
@@ -1103,6 +1115,7 @@ def process_image(in_path, out_path):
 
 
         # 8. perspective transform
+        # deskew part 2
 
         # crop as a quadrilateral
         # not better than "crop as a rectangle"?
