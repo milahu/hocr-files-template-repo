@@ -893,10 +893,11 @@ def process_image(in_path, out_path):
             print()
             print(f"line 570: page_num={page_num}")
 
-        rotation_error = -1 * (
-            -top_angle
-            -bottom_angle
-        ) / 2.0
+        rotation_error = np.mean([
+            top_angle,
+            bottom_angle,
+            outside_angle - 90,
+        ])
 
         Mrot = cv2.getRotationMatrix2D(
             (W_img/2, H_img/2),
