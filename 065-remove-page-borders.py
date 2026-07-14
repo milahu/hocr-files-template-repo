@@ -27,8 +27,13 @@ import os
 import re
 import math
 import random
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 import numpy as np
 import cv2
+import psutil
+from tqdm import tqdm
+
 
 from _shared import (
     load_config,
@@ -1250,7 +1255,7 @@ def process_image(in_path, out_path):
             ], np.int32)
             cv2.polylines(vis, [pts], True, (0,0,255), 3)
             name = f"{page_num:03d}.crop_debug_rotated_line730.jpg"
-            print(f"writing {name}")
+            # print(f"writing {name}")
             cv2.imwrite(name, vis)
 
         # crop = rotated[
@@ -1384,33 +1389,80 @@ def process_image(in_path, out_path):
 
     ensure_dir(os.path.dirname(out_path))
     cv2.imwrite(out_path, canvas, config.cv2_imwrite_params)
-    print(f"writing {out_path}")
+    # print(f"writing {out_path}")
+
+
+def _process_file(fname):
+    m = re.match(r"^(\d+)", fname)
+    page_num = int(m.group(1))  # can throw
+
+    in_path = os.path.join(INPUT_DIR, fname)
+    out_path = os.path.join(OUTPUT_DIR, fname)
+
+    process_image(in_path, out_path)
 
 
 def main():
     ensure_dir(OUTPUT_DIR)
-    files = sorted([f for f in os.listdir(INPUT_DIR) if f.endswith(f".{config.scan_format}")])
+
+    files = sorted(
+        f for f in os.listdir(INPUT_DIR)
+        if f.endswith(f".{config.scan_format}")
+    )
+
     if not files:
         print("No image files found in", INPUT_DIR)
         return
+
+    # Only submit work for files that still need processing.
+    work = []
     for fname in files:
-        m = re.match(r"^(\d+)", fname)
-        # page_num = int(m.group(1)) if m else 0
-        page_num = int(m.group(1)) # can throw
-        # if page_num != 14: continue # debug
-        # if not page_num in (1, 2, 12, 13): continue # debug
-        # if not page_num in [340, 345]: continue # debug
-        # if page_num < 300: continue # debug
-        # if page_num != 320: continue # debug
-        in_path = os.path.join(INPUT_DIR, fname)
+        if 0:
+            # debug: process only some pages
+            m = re.match(r"^(\d+)", fname)
+            page_num = int(m.group(1))  # can throw
+            if not page_num in (1, 2, 3):
+                continue
         out_path = os.path.join(OUTPUT_DIR, fname)
-        if os.path.exists(out_path):
-            continue
-        try:
-            process_image(in_path, out_path)
-        except Exception as exc:
-            print(f"Error processing {fname}: {exc}")
-            raise
+        if not os.path.exists(out_path):
+            work.append(fname)
+
+    if not work:
+        print("nothing to do")
+        return
+
+    num_workers = psutil.cpu_count(logical=False) or 1
+
+    # by default, OpenCV uses multiple CPU threads
+    cv2.setNumThreads(1)
+
+    if 0:
+        # debug: disable parallel processing
+        num_workers = 1
+
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = {
+            executor.submit(_process_file, fname): fname
+            for fname in work
+        }
+
+        tqdm_kwargs = dict(
+            total=len(work),
+            ncols=80,
+            unit="page",
+        )
+
+        with tqdm(**tqdm_kwargs) as pbar:
+            for future in as_completed(futures):
+                fname = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    print(f"Error processing {fname}: {exc}")
+                    raise
+                finally:
+                    pbar.update(1)
+
 
 if __name__ == "__main__":
     main()
