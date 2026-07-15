@@ -137,3 +137,8 @@ do_level = True
 # lowthresh, highthresh = 0.05, 0.95
 # lowthresh, highthresh = 0.2, 0.8
 lowthresh, highthresh = 0.3, 0.7
+
+
+
+# https://github.com/derf/feh
+image_viewer = "feh"

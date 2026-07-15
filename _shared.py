@@ -1,6 +1,8 @@
 from pathlib import Path
 import importlib.util
 import re
+from typing import Iterable
+from collections import defaultdict
 
 config_path = Path("000-config.py")
 
@@ -94,3 +96,88 @@ def get_page_num(path):
     # page_num = int(m.group(1)) if m else 0
     page_num = int(m.group(1)) # can throw
     return page_num
+
+
+def compress_paths(paths: Iterable[str | Path]) -> str:
+    """
+    Compress a list of file paths into Bash brace expansion syntax.
+
+    Example:
+        >>> compress_paths([
+        ...     "common-dir/001.tiff",
+        ...     "common-dir/003.tiff",
+        ...     "common-dir/005.tiff",
+        ... ])
+        'common-dir/{001,003,005}.tiff'
+
+        >>> compress_paths([
+        ...     Path("foo/a.txt"),
+        ...     Path("foo/b.txt"),
+        ... ])
+        'foo/{a,b}.txt'
+    """
+    paths = [Path(p) for p in paths]
+
+    if not paths:
+        return ""
+
+    groups = defaultdict(list)
+
+    for path in paths:
+        stem = path.stem
+        suffix = "".join(path.suffixes)
+        parent = path.parent
+
+        groups[(parent, suffix)].append(stem)
+
+    results = []
+
+    for (parent, suffix), stems in groups.items():
+        stems = sorted(stems)
+
+        # Find longest common prefix/suffix of stems
+        prefix = stems[0]
+        for s in stems[1:]:
+            i = 0
+            while i < min(len(prefix), len(s)) and prefix[i] == s[i]:
+                i += 1
+            prefix = prefix[:i]
+
+        suffix_part = stems[0]
+        for s in stems[1:]:
+            i = 0
+            while (
+                i < min(len(suffix_part), len(s))
+                and suffix_part[-(i + 1)] == s[-(i + 1)]
+            ):
+                i += 1
+            suffix_part = suffix_part[len(suffix_part) - i :] if i else ""
+
+        middles = []
+        valid = True
+        for s in stems:
+            if not (s.startswith(prefix) and s.endswith(suffix_part)):
+                valid = False
+                break
+            middle = s[len(prefix) :]
+            if suffix_part:
+                middle = middle[: -len(suffix_part)]
+            middles.append(middle)
+
+        if valid and len(stems) > 1 and all(m for m in middles):
+            filename = f"{prefix}{{{','.join(middles)}}}{suffix_part}{suffix}"
+        elif len(stems) > 1:
+            filename = f"{{{','.join(stems)}}}{suffix}"
+        else:
+            filename = stems[0] + suffix
+
+        if parent == Path("."):
+            results.append(filename)
+        else:
+            results.append(str(parent / filename))
+
+    return " ".join(sorted(results))
+
+
+def get_image_viewer_argstr(filenames, config):
+    return f"{config.image_viewer} {compress_paths(filenames)}"
