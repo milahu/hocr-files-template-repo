@@ -11,6 +11,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import psutil
 from PIL import Image, ImageStat
+from tqdm import tqdm
 
 
 # input directory
@@ -69,7 +70,17 @@ def main():
 
     # Compute lightness in parallel
     page_lightness = {}
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+
+    tqdm_kwargs = dict(
+        total=len(image_files),
+        ncols=80,
+        unit="page",
+    )
+
+    with (
+        ProcessPoolExecutor(max_workers=max_workers) as executor,
+        tqdm(**tqdm_kwargs) as pbar
+    ):
         futures = {executor.submit(try_compute_lightness, f): f for f in image_files}
         for future in as_completed(futures):
             res, err = future.result()
@@ -78,12 +89,15 @@ def main():
                 raise err  # propagate exception to main
             filename, lightness = res
             page_lightness[filename] = lightness
-            print(f"lightness: {lightness:10.6f} {filename}")
+            # print(f"lightness: {lightness:10.6f} {filename}")
+            pbar.update(1)
 
     with open(dst, "w", encoding="utf8") as fd:
         # sort by lightness descending
         for (filename, lightness) in sorted(page_lightness.items(), key=lambda x: -x[1]):
             fd.write(f"{lightness:010.6f} {filename}\n")
+
+    print(f"done {dst}")
 
 
 if __name__ == "__main__":
