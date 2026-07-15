@@ -12,6 +12,13 @@ import cv2
 import psutil
 import numpy as np
 
+from _shared import (
+    load_config,
+    get_page_num,
+    latest_dst_exists,
+    remove_done_files,
+)
+
 
 # --- Setup -------------------------------------------------------------------
 os.chdir(Path(__file__).resolve().parent)
@@ -21,11 +28,7 @@ dst.mkdir(parents=True, exist_ok=True)
 
 
 # --- Settings ----------------------------------------------------------------
-config_path = Path("0662-level-config.py")
-
-spec = importlib.util.spec_from_file_location("level_config", config_path)
-config = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(config)
+config = load_config()
 
 
 # --- Helper: level adjustment (contrast stretch) -----------------------------
