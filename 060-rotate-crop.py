@@ -15,6 +15,7 @@ import numpy as np
 from _shared import (
     load_config,
     get_page_num,
+    latest_dst_exists,
 )
 
 
@@ -65,9 +66,12 @@ def process_image(image_path: Path) -> str:
     filename = image_path.name
     page_number = int(filename.split(".")[0]) # "001.jpg" -> 1
     output_path = dst / filename
-    if output_path.exists():
-        print(f"keeping {output_path}")
+    if latest_dst_exists(image_path, output_path):
+        # print(f"keeping {output_path}")
         return
+    if output_path.exists():
+        # replace outdated output_path with the latest version
+        output_path.unlink()
 
     crop_box = config.crop_odd_box if page_number % 2 == 1 else config.crop_even_box
     rotation = config.rotate_odd if page_number % 2 == 1 else config.rotate_even
@@ -115,7 +119,7 @@ def try_process_image(*args):
 
 
 # --- Parallel execution ------------------------------------------------------
-if __name__ == "__main__":
+def main():
     t1 = time.time()
     images = sorted(src.glob(f"*.{config.scan_format}"))
     if not images:
@@ -127,9 +131,26 @@ if __name__ == "__main__":
         for f_src in images:
             f_dst = dst / f_src.name
             if f_dst.exists():
+                # FIXME compare f_src and f_dst
+                # if f_src and f_dst are not identical
+                # then replace f_dst with f_src
                 continue
             os.link(f_src, f_dst)
         sys.exit()
+
+    # filter by existing output files
+    images2 = []
+    for f_src in images:
+        f_dst = dst / f_src.name
+        # if f_dst.exists():
+        if latest_dst_exists(f_src, f_dst):
+            continue
+        images2.append(f_src)
+    images = images2
+
+    if not images:
+        print("nothing to do")
+        return
 
     num_workers = psutil.cpu_count(logical=False) or 1
     print(f"Using {num_workers} workers...")
@@ -146,3 +167,7 @@ if __name__ == "__main__":
 
     t2 = time.time()
     print(f"done {len(images)} pages in {int(t2 - t1)} seconds using {num_workers} workers")
+
+
+if __name__ == "__main__":
+    main()

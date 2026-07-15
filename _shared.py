@@ -181,3 +181,22 @@ def compress_paths(paths: Iterable[str | Path]) -> str:
 
 def get_image_viewer_argstr(filenames, config):
     return f"{config.image_viewer} {compress_paths(filenames)}"
+
+
+def latest_dst_exists(f_src, f_dst):
+    """
+    check if the latest version of dst exists
+    """
+    if not isinstance(f_src, Path): f_src = Path(f_src)
+    if not isinstance(f_dst, Path): f_dst = Path(f_dst)
+    if not f_dst.exists():
+        # f_dst does not exist at all
+        return False
+    # f_dst exists
+    if f_dst.stat().st_mtime < f_src.stat().st_mtime:
+        # f_src was modified after f_dst
+        # so f_dst is not the latest version
+        return False
+    # f_src was modified before f_dst
+    # so f_dst is the latest version
+    return True
