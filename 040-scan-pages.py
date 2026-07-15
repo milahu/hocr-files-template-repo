@@ -8,10 +8,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+import shutil
 
 from _shared import (
     load_config,
     get_page_num,
+    get_image_viewer_argstr,
 )
 
 
@@ -42,6 +44,15 @@ def main():
 
     dst.mkdir(exist_ok=True)
 
+    tmp_root = dst.parent
+    tmp_batch = tmp_root / f".{dst.name}.tmp.{int(time.time())}"
+    print(f"scanning to tmp_batch: {tmp_batch}")
+
+    if tmp_batch.exists():
+        shutil.rmtree(tmp_batch)
+
+    tmp_batch.mkdir(parents=True)
+
     # allow appending some pages
     # without having to rename all files
     max_num_pages = int(max(
@@ -71,7 +82,7 @@ def main():
         "--AutoDeskew=no",
         "-x", str(config.margined_scan_x),
         "-y", str(config.margined_scan_y),
-        f"--batch={dst / (page_num_fmt + '.' + config.scan_format)}",
+        f"--batch={tmp_batch / (page_num_fmt + '.' + config.scan_format)}",
         "--progress",
         "--batch-print",
         f"--batch-start={args.first_page}",
@@ -82,7 +93,6 @@ def main():
         args_file.write_text(" ".join(shlex.quote(x) for x in cmd) + "\n")
 
     t1 = time.time()
-    num_pages_1 = len(list(dst.glob(f"*.{config.scan_format}")))
 
     print("+", shlex.join(cmd))
     proc = subprocess.run(cmd)
@@ -92,11 +102,37 @@ def main():
     if proc.returncode != 0:
         print(f"scanimage failed with returncode {proc.returncode}")
 
-    num_pages_2 = len(list(dst.glob(f"*.{config.scan_format}")))
+    added = 0
+    skipped = 0
+    added_files = []
+    for src in sorted(tmp_batch.glob(f"*.{config.scan_format}")):
+        dst_file = dst / src.name
+        if dst_file.exists():
+            print(f"keeping {dst_file}")
+            # TODO keep tempfiles?
+            src.unlink()
+            skipped += 1
+        else:
+            print(f"adding {dst_file}")
+            shutil.move(src, dst_file)
+            added += 1
+            added_files.append(dst_file)
+    # TODO keep tempfiles?
+    shutil.rmtree(tmp_batch)
+
     t2 = time.time()
 
-    print(f"done {num_pages_2 - num_pages_1} pages in {int(t2 - t1)} seconds")
+    num_pages_scanned = added + skipped
+    print(
+        f"scanned {num_pages_scanned} pages, "
+        f"added {added}, skipped {skipped} existing "
+        f"in {int(t2 - t1)} seconds"
+    )
 
+    added_files.sort()
+
+    print("view added files:")
+    print(f"  {get_image_viewer_argstr(added_files, config)}")
 
 if __name__ == "__main__":
     main()
