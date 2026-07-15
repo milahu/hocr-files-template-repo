@@ -7,8 +7,10 @@ by filling the missing width
 with the average color near the binding edge
 """
 
-INPUT_DIR = "060-rotate-crop"
-OUTPUT_DIR = "065-remove-page-borders"
+from pathlib import Path
+
+INPUT_DIR = Path("060-rotate-crop")
+OUTPUT_DIR = Path("065-remove-page-borders")
 
 # === Tuning parameters ===
 DEBUG = True
@@ -38,6 +40,8 @@ from tqdm import tqdm
 from _shared import (
     load_config,
     get_page_num,
+    latest_dst_exists,
+    remove_done_files,
 )
 
 config = load_config()
@@ -55,7 +59,7 @@ def ensure_dir(p):
     os.makedirs(p, exist_ok=True)
 
 def save_dbg(img, path):
-    ensure_dir(os.path.dirname(path))
+    ensure_dir(path.parent)
     cv2.imwrite(path, img)
 
 def percentile_threshold(gray):
@@ -257,7 +261,7 @@ def build_affine_without_shear(pt_v_top, pt_v_bot, expected_w, expected_h, bad_o
         arrow_p = origin + np.array([px, py], dtype=np.float32) * 80.0
         cv2.arrowedLine(vis, (int(origin[0]), int(origin[1])), (int(arrow_u[0]), int(arrow_u[1])), (255,0,255), 2)
         cv2.arrowedLine(vis, (int(origin[0]), int(origin[1])), (int(arrow_p[0]), int(arrow_p[1])), (0,255,255), 2)
-        cv2.imwrite(os.path.join(dbgdir, "debug_axes_and_corners.png"), vis)
+        cv2.imwrite(dbgdir.joinpath("debug_axes_and_corners.png"), vis)
 
     return M, src_corners, dst_corners, "ok"
 
@@ -348,8 +352,8 @@ def get_gray_mask_contours(img, dbgdir):
     if cv2.mean(gray)[0] < 127:
         mask_init = cv2.bitwise_not(mask_init)
     if DEBUG:
-        save_dbg(gray, os.path.join(dbgdir, "01_gray.png"))
-        save_dbg(mask_init, os.path.join(dbgdir, f"02_thresh_thr{thr}_hp{hp}.png"))
+        save_dbg(gray, dbgdir.joinpath("01_gray.png"))
+        save_dbg(mask_init, dbgdir.joinpath(f"02_thresh_thr{thr}_hp{hp}.png"))
 
     # without a9dc2b24e6b0d1d49b6fc232223d6431ba3442a5 bad: fix perspective transform for broken ADF scanners
     # Invert if necessary, so the page is always "white" for thresholding
@@ -592,7 +596,7 @@ if 1:
         os.makedirs(p, exist_ok=True)
 
     def save_dbg(img, path):
-        ensure_dir(os.path.dirname(path))
+        ensure_dir(path.parent)
         cv2.imwrite(path, img)
 
     def percentile_threshold(gray):
@@ -685,7 +689,7 @@ def process_image(in_path, out_path):
 
     # 1. load image
 
-    fname = os.path.basename(in_path)
+    fname = in_path.name
     m = re.match(r"^(\d+)", fname)
     page_num = int(m.group(1)) if m else 0
     bad_on_left = (page_num % 2 == 1)
@@ -705,7 +709,7 @@ def process_image(in_path, out_path):
     # expected_w = int(round(ASPECT * H_img))
     # expected_h = H_img
 
-    dbgdir = os.path.join(OUTPUT_DIR, "debug", f"{page_num:03d}")
+    dbgdir = OUTPUT_DIR.joinpath("debug", f"{page_num:03d}")
     if DEBUG: ensure_dir(dbgdir)
 
 
@@ -1387,17 +1391,15 @@ def process_image(in_path, out_path):
     if input_is_grayscale:
         canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
 
-    ensure_dir(os.path.dirname(out_path))
+    ensure_dir(out_path.parent)
     cv2.imwrite(out_path, canvas, config.cv2_imwrite_params)
     # print(f"writing {out_path}")
 
 
-def _process_file(fname):
-    m = re.match(r"^(\d+)", fname)
-    page_num = int(m.group(1))  # can throw
+def _process_file(in_path):
+    # page_num = get_page_num(in_path)
 
-    in_path = os.path.join(INPUT_DIR, fname)
-    out_path = os.path.join(OUTPUT_DIR, fname)
+    out_path = OUTPUT_DIR / in_path.name
 
     process_image(in_path, out_path)
 
@@ -1405,29 +1407,25 @@ def _process_file(fname):
 def main():
     ensure_dir(OUTPUT_DIR)
 
-    files = sorted(
-        f for f in os.listdir(INPUT_DIR)
-        if f.endswith(f".{config.scan_format}")
-    )
+    files = sorted(INPUT_DIR.glob(f"*.{config.scan_format}"))
 
     if not files:
         print("No image files found in", INPUT_DIR)
         return
 
     # Only submit work for files that still need processing.
-    work = []
-    for fname in files:
-        if 0:
-            # debug: process only some pages
-            m = re.match(r"^(\d+)", fname)
-            page_num = int(m.group(1))  # can throw
-            if not page_num in (1, 2, 3):
-                continue
-        out_path = os.path.join(OUTPUT_DIR, fname)
-        if not os.path.exists(out_path):
-            work.append(fname)
+    files = remove_done_files(files, OUTPUT_DIR)
 
-    if not work:
+    if 0:
+        # debug: process only some pages
+        def filter_file(file):
+            page_num = get_page_num(file)
+            if not page_num in (1, 2, 3):
+                return False
+            return True
+        files = list(filter(filter_file, files))
+
+    if not files:
         print("nothing to do")
         return
 
@@ -1443,11 +1441,11 @@ def main():
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         futures = {
             executor.submit(_process_file, fname): fname
-            for fname in work
+            for fname in files
         }
 
         tqdm_kwargs = dict(
-            total=len(work),
+            total=len(files),
             ncols=80,
             unit="page",
         )
