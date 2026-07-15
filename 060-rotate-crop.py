@@ -141,6 +141,15 @@ def main():
 
     images = remove_done_files(images, dst)
 
+    if 0:
+        # debug: process only some pages
+        def filter_file(file):
+            page_num = get_page_num(file)
+            if not page_num in (1, 2, 3):
+                return False
+            return True
+        images = list(filter(filter_file, images))
+
     if not images:
         print("nothing to do")
         return
