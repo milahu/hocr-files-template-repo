@@ -200,3 +200,29 @@ def latest_dst_exists(f_src, f_dst):
     # f_src was modified before f_dst
     # so f_dst is the latest version
     return True
+
+
+def remove_done_files(files, dst, dst_suffix=None):
+    """
+    filter input files by existing output files
+
+    if the corresponding output file
+    exists and is not older than the input file
+    then remove the input file
+
+    if the corresponding output file
+    does not exist or is older than the input file
+    then keep the input file
+    """
+    if not isinstance(dst, Path): dst = Path(dst)
+    files2 = []
+    for f_src in files:
+        if not isinstance(f_src, Path): f_src = Path(f_src)
+        f_dst = dst / f_src.name
+        if dst_suffix:
+            f_dst = f_dst.with_suffix(dst_suffix)
+        # if f_dst.exists():
+        if latest_dst_exists(f_src, f_dst):
+            continue
+        files2.append(f_src)
+    return files2

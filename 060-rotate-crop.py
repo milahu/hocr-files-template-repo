@@ -16,6 +16,7 @@ from _shared import (
     load_config,
     get_page_num,
     latest_dst_exists,
+    remove_done_files,
 )
 
 
@@ -138,15 +139,7 @@ def main():
             os.link(f_src, f_dst)
         sys.exit()
 
-    # filter by existing output files
-    images2 = []
-    for f_src in images:
-        f_dst = dst / f_src.name
-        # if f_dst.exists():
-        if latest_dst_exists(f_src, f_dst):
-            continue
-        images2.append(f_src)
-    images = images2
+    images = remove_done_files(images, dst)
 
     if not images:
         print("nothing to do")
