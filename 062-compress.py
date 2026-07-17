@@ -135,6 +135,15 @@ def process_image(args):
         f_dst = dst / base_dst
         f_tmp = f_dst
 
+    if f.suffix == f".{image_format}":
+        # the source image is already compressed
+        if not replace:
+            # copy
+            print(f"cp {f} {f_dst}")
+            shutil.copy(f, f_dst)
+        done, message = True, None
+        return done, message
+
     size_a = f.stat().st_size
 
     with Image.open(f) as img:
@@ -210,9 +219,10 @@ def process_image(args):
 
 files = [
     f
-    for f in sorted(src.glob(f"*.{scan_format}"))
+    for f in sorted(src.glob("*"))
     # if re.fullmatch(rf"\d+\.{re.escape(scan_format)}", f.name)
-    if f.name.endswith(f".{scan_format}")
+    # if f.name.endswith(f".{scan_format}")
+    if f.suffix in (f".{scan_format}", f".{image_format}")
 ]
 
 def filter_file(f_src):
