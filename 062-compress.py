@@ -49,8 +49,7 @@ datetime_str = (
     .replace(":", "-")
 )
 
-# src = Path("040-scan-pages")
-src = Path("045-crop-scan-area")
+src = Path("060-rotate-crop")
 dst = Path(Path(__file__).stem)
 # dst = src  # replace files in src
 
