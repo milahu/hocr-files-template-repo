@@ -2,7 +2,6 @@
 *.jpg
 tessdata_best
 040-scan-pages/scanimage-args.txt
-*.pdf
 __pycache__
 trash
 070-deskew/*.avif
