@@ -12,6 +12,15 @@ fix_colors_py = Path("012-fix-colors.py")
 calibration_json = Path("012-fix-colors.calibration.json")
 
 
+image_suffixes = (
+    ".jpg",
+    ".jpeg",
+    ".tiff",
+    ".png",
+    ".avif",
+)
+
+
 def main():
     # Change to the directory containing this script
     script_path = Path(__file__).resolve()
@@ -23,6 +32,10 @@ def main():
 
     # for src_file in sorted((script_dir / "010-scan-cover").glob("*.tiff")):
     for src_file in sorted(src.glob("*")):
+
+        if src_file.suffix not in image_suffixes:
+            continue
+
         dst_file = dst / src_file.name
 
         if dst_file.exists():
