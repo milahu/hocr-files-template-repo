@@ -53,3 +53,4 @@ if your epub reader fails to open these files, then just use a web browser
 ## related
 
 - [github.com/milahu/books](https://github.com/milahu/books)
+- [github.com/trufanov-nok/scantailor-universal](https://github.com/trufanov-nok/scantailor-universal)
