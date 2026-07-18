@@ -34,6 +34,7 @@ from tqdm import tqdm
 from _shared import (
     load_config,
     get_page_num,
+    remove_done_files,
 )
 
 # -----------------------------------------------------------------------------
@@ -227,13 +228,11 @@ files = [
     if f.suffix in (f".{scan_format}", f".{image_format}")
 ]
 
-def filter_file(f_src):
-    base_dst = f_src.with_suffix(f".{image_format}").name
-    f_dst = dst / base_dst
-    # print(f"filter_file: f_src={f_src} f_dst={f_dst}")
-    return not f_dst.exists()
+files = remove_done_files(files, dst, dst_suffix=f".{image_format}")
 
-files = list(filter(filter_file, files))
+if not files:
+    print("nothing to do")
+    sys.exit()
 
 tasks = [
     (
