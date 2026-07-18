@@ -29,6 +29,7 @@ from pathlib import Path
 
 import psutil
 from PIL import Image
+from tqdm import tqdm
 
 from _shared import (
     load_config,
@@ -189,7 +190,8 @@ def process_image(args):
     size_b = f_tmp.stat().st_size
 
     message = None
-    if size_b < size_a:
+    # if size_b < size_a:
+    if False:
         percent = size_b * 100 // size_a
         message = (
             # my scanner returns uncompressed TIFF files
@@ -249,12 +251,23 @@ tasks = [
 
 num_done = 0
 
-with ProcessPoolExecutor(max_workers=num_workers) as executor:
+tqdm_kwargs = dict(
+    total=len(tasks),
+    ncols=80,
+    unit="page",
+)
+
+with (
+    ProcessPoolExecutor(max_workers=num_workers) as executor,
+    tqdm(**tqdm_kwargs) as pbar,
+):
     for done, message in executor.map(process_image, tasks):
         if message:
+            print()
             print(message)
         if done:
             num_done += 1
+        pbar.update(1)
 
 # -----------------------------------------------------------------------------
 
@@ -270,4 +283,6 @@ if replace and num_done == 0:
     except OSError:
         pass
 
+r'''
 print(f"done. compressed {num_done} images")
+'''
