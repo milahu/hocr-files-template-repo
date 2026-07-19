@@ -54,4 +54,4 @@ if your epub reader fails to open these files, then just use a web browser
 
 - [github.com/milahu/books](https://github.com/milahu/books)
 - [github.com/trufanov-nok/scantailor-universal](https://github.com/trufanov-nok/scantailor-universal)
-- [diybookscanner.org/forum](http://diybookscanner.org/forum/)
+- [diybookscanner.org/forum](https://diybookscanner.org/forum/)
