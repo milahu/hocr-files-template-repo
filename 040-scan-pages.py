@@ -16,6 +16,8 @@ from _shared import (
     get_image_viewer_argstr,
 )
 
+keep_tempfiles = True
+
 
 def main():
     script_dir = Path(__file__).resolve().parent
@@ -45,7 +47,7 @@ def main():
     dst.mkdir(exist_ok=True)
 
     tmp_root = dst.parent
-    tmp_batch = tmp_root / f".{dst.name}.tmp.{int(time.time())}"
+    tmp_batch = tmp_root / f"{dst.name}.tmp.{int(time.time())}"
     print(f"scanning to tmp_batch: {tmp_batch}")
 
     if tmp_batch.exists():
@@ -109,16 +111,18 @@ def main():
         dst_file = dst / src.name
         if dst_file.exists():
             print(f"keeping {dst_file}")
-            # TODO keep tempfiles?
-            src.unlink()
+            if not keep_tempfiles:
+                src.unlink()
             skipped += 1
         else:
             print(f"adding {dst_file}")
             shutil.move(src, dst_file)
             added += 1
             added_files.append(dst_file)
-    # TODO keep tempfiles?
-    shutil.rmtree(tmp_batch)
+    if keep_tempfiles:
+        print(f"keeping tempfiles in tmp_batch: {tmp_batch}")
+    else:
+        shutil.rmtree(tmp_batch)
 
     t2 = time.time()
 
