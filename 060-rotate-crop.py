@@ -37,8 +37,15 @@ def remove_bottom_white_rectangle(img):
     Assumes the white rectangle spans the entire image width.
     """
 
-    # Convert to grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # Convert to grayscale only if needed
+    if img.ndim == 2:
+        gray = img
+    elif img.shape[2] == 3: # BGR
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    elif img.shape[2] == 4: # BGRA
+        gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+    else:
+        raise ValueError(f"Unsupported image shape: {img.shape}")
 
     # Image dimensions
     height, width = gray.shape
