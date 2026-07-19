@@ -141,7 +141,7 @@ def process_image(args):
         # the source image is already compressed
         if not replace:
             # copy
-            print(f"cp {f} {f_dst}")
+            # print(f"cp {f} {f_dst}")
             shutil.copy(f, f_dst)
         done, message = True, None
         return done, message
