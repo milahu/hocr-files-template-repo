@@ -128,6 +128,8 @@ def main():
                 raise
             # OSError: [Errno 39] Directory not empty
             print(f"keeping tempfiles in tmp_batch: {tmp_batch}")
+            print("  todo: remove tempfiles:")
+            print(f"    rm -rf {tmp_batch}")
             pass
     else:
         shutil.rmtree(tmp_batch)
