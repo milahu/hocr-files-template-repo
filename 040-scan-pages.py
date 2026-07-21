@@ -120,7 +120,6 @@ def main():
             added += 1
             added_files.append(dst_file)
     if keep_tempfiles:
-        print(f"keeping tempfiles in tmp_batch: {tmp_batch}")
         # remove empty dir
         try:
             os.rmdir(tmp_batch)
@@ -128,6 +127,7 @@ def main():
             if exc.errno != 39:
                 raise
             # OSError: [Errno 39] Directory not empty
+            print(f"keeping tempfiles in tmp_batch: {tmp_batch}")
             pass
     else:
         shutil.rmtree(tmp_batch)
