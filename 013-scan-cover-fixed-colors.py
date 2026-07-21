@@ -6,6 +6,13 @@ import subprocess
 import sys
 import shlex
 
+from _shared import (
+    load_config,
+    get_page_num,
+    latest_dst_exists,
+    remove_done_files,
+)
+
 
 src = Path("010-scan-cover")
 fix_colors_py = Path("012-fix-colors.py")
@@ -28,19 +35,25 @@ def main():
     dst = Path(script_path.stem)
 
     os.chdir(script_dir)
+
+    src_files = sorted(src.glob("*"))
+
+    def filter_src_file(src_file):
+        return src_file.suffix in image_suffixes
+
+    src_files = list(filter(filter_src_file, src_files))
+
+    src_files = remove_done_files(src_files, dst)
+
+    if not src_files:
+        print("nothing to do")
+        return
+
     dst.mkdir(exist_ok=True)
 
-    # for src_file in sorted((script_dir / "010-scan-cover").glob("*.tiff")):
-    for src_file in sorted(src.glob("*")):
-
-        if src_file.suffix not in image_suffixes:
-            continue
+    for src_file in src_files:
 
         dst_file = dst / src_file.name
-
-        if dst_file.exists():
-            print(f"keeping {dst_file}")
-            continue
 
         cmd = [
             sys.executable,
