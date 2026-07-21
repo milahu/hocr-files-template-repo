@@ -580,6 +580,27 @@ def print_runs(runs, filename_of_page):
         key=lambda c: c.confidence,
         reverse=True
     )
+
+    # print image viewer command to view all pages of this parity
+    sample_page_num = get_page_num(runs[0].filenames[0])
+    is_odd_pages = (sample_page_num % 2 == 1)
+    filenames = []
+    if is_odd_pages:
+        for page, filename in filename_of_page.items():
+            page_num = get_page_num(filename)
+            if page_num % 2 == 1:
+                filenames.append(filename)
+    else:
+        # even pages
+        for page, filename in filename_of_page.items():
+            page_num = get_page_num(filename)
+            if page_num % 2 == 0:
+                filenames.append(filename)
+    filenames.sort()
+    parity_name = "odd" if is_odd_pages else "even"
+    print(f"  view all {parity_name} pages:")
+    print(f"    {get_image_viewer_argstr(filenames, config)}")
+
     for cluster_idx, run in enumerate(runs):
         filenames = sorted(set(map(str, run.filenames)))
         data = {
