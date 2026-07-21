@@ -42,6 +42,8 @@ def main():
     )
     args = parser.parse_args()
 
+    assert args.scanner_name.strip(), "error: empty scanner name"
+
     config = load_config()
 
     dst.mkdir(exist_ok=True)
