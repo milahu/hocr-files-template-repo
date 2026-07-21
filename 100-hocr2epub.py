@@ -94,7 +94,7 @@ todo_args = [
     "--doc-publisher", "",
     "--doc-language", "de",
     "--doc-isbn", "0000000000000",
-    "--doc-cover-image", "070-deskew/999.jpg",
+    "--doc-cover-image", "070-deskew/999.tiff",
     "--canonical-url-base", "https://milahu.github.io/todo/",
 ]
 
