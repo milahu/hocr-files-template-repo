@@ -73,9 +73,7 @@ args += [
     "--image-format", "avif",
     "--text-format", "html",
     # TODO? move these config items to 000-config.py
-    "--doc-title", "",
     "--doc-modified", doc_modified,
-    "--doc-isbn", "0000000000000",
 ]
 
 
