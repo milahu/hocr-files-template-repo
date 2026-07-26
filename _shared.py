@@ -89,8 +89,12 @@ def load_config(config_path=config_path):
     # so it is enough to specify only the low threshold
     if hasattr(config, "lowthresh") and not hasattr(config, "highthresh"):
         config.highthresh = 1 - config.lowthresh
+    if not hasattr(config, "text_lowthresh"):
+        config.text_lowthresh = config.lowthresh
     if hasattr(config, "text_lowthresh") and not hasattr(config, "text_highthresh"):
         config.text_highthresh = 1 - config.text_lowthresh
+    if not hasattr(config, "images_lowthresh"):
+        config.images_lowthresh = config.lowthresh
     if hasattr(config, "images_lowthresh") and not hasattr(config, "images_highthresh"):
         config.images_highthresh = 1 - config.images_lowthresh
 
