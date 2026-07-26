@@ -25,6 +25,21 @@ RANSAC_MIN_INLIERS = 20
 THRESH_HIGH_PERCENTILE = 99
 THRESH_MIN = 200
 
+# cleanup the inside edge
+#
+# the "dirty" inside edge is created
+# by rotating and warping the three other edges
+# so in many cases, the inside edge is crooked (not vertical)
+#
+# if we remove the dirty inside edge
+# then we remove a small rectangle from the inside edge
+# to get a straight inside edge (vertical)
+#
+# if we keep the dirty inside edge
+# then there is a small transparent rectangle inside of the inside edge
+remove_inside_transparent_strip = True
+
+
 import os
 import re
 import math
@@ -33,6 +48,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 import cv2
+import PIL.Image
 import psutil
 from tqdm import tqdm
 
@@ -60,7 +76,7 @@ def ensure_dir(p):
 
 def save_dbg(img, path):
     ensure_dir(path.parent)
-    cv2.imwrite(path, img)
+    save_image(path, img)
 
 def percentile_threshold(gray):
     high_p = np.percentile(gray, THRESH_HIGH_PERCENTILE)
@@ -281,7 +297,7 @@ def build_affine_without_shear(pt_v_top, pt_v_bot, expected_w, expected_h, bad_o
         arrow_p = origin + np.array([px, py], dtype=np.float32) * 80.0
         cv2.arrowedLine(vis, (int(origin[0]), int(origin[1])), (int(arrow_u[0]), int(arrow_u[1])), (255,0,255), 2)
         cv2.arrowedLine(vis, (int(origin[0]), int(origin[1])), (int(arrow_p[0]), int(arrow_p[1])), (0,255,255), 2)
-        cv2.imwrite(dbgdir.joinpath("debug_axes_and_corners.png"), vis)
+        save_image(dbgdir.joinpath("debug_axes_and_corners.png"), vis)
 
     return M, src_corners, dst_corners, "ok"
 
@@ -617,7 +633,7 @@ if 1:
 
     def save_dbg(img, path):
         ensure_dir(path.parent)
-        cv2.imwrite(path, img)
+        save_image(path, img)
 
     def percentile_threshold(gray):
         high_p = np.percentile(gray, THRESH_HIGH_PERCENTILE)
@@ -711,6 +727,32 @@ def transform_points_affine(points, M):
     ])
     transformed = points_h @ M.T
     return transformed
+
+
+def save_image(path, image):
+    """
+    Save image correctly, including alpha-channel TIFFs,
+    using lossless TIFF compression.
+    """
+    global config
+    pil_image_suffix = ("." + config.pil_image_save_kwargs["format"].lower())
+    assert Path(path).suffix == pil_image_suffix, f"bad path: {path!r}"
+    path = str(path)
+    if image.ndim == 2:
+        # Grayscale
+        pil_image = PIL.Image.fromarray(image)
+    elif image.shape[2] == 3:
+        # OpenCV BGR -> RGB
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        pil_image = PIL.Image.fromarray(rgb)
+    elif image.shape[2] == 4:
+        # OpenCV BGRA -> RGBA
+        rgba = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
+        pil_image = PIL.Image.fromarray(rgba)
+    else:
+        raise ValueError(f"Unsupported image shape: {image.shape}")
+
+    pil_image.save(path, **config.pil_image_save_kwargs)
 
 
 def process_image(in_path, out_path):
@@ -1061,9 +1103,9 @@ def process_image(in_path, out_path):
             ], dtype=np.float32)).astype(np.int32)
         cv2.polylines(vis, [pts], True, (0,0,255), 3) # red
 
-        name = OUTPUT_DIR / f"{page_num:03d}.line-0900-fit-lines-ransac.jpg"
+        name = OUTPUT_DIR / f"{page_num:03d}.line-0900-fit-lines-ransac.tiff"
         # print(f"writing {name}")
-        cv2.imwrite(name, vis)
+        save_image(name, vis)
 
     src_corners = np.float32([
         inside_top,
@@ -1139,13 +1181,35 @@ def process_image(in_path, out_path):
                 f"outside_angle={outside_angle:.3f}"
             )
 
-        rotated = cv2.warpAffine(
-            img,
-            Mrot,
-            (W_img, H_img),
-            # borderValue=(255,255,255) # white
-            borderValue=(128,128,128) # gray
-        )
+        if remove_inside_transparent_strip:
+            # remove the extra inside edge
+            # rotate with gray background
+            rotated = cv2.warpAffine(
+                img,
+                Mrot,
+                (W_img, H_img),
+                # borderValue=(255,255,255) # white
+                borderValue=(128,128,128) # gray
+            )
+        else:
+            # keep the extra inside edge
+            # rotate with transparent background
+            # add alpha channel
+            img_bgra = cv2.cvtColor(
+                img,
+                cv2.COLOR_BGR2BGRA,
+            )
+            # init alpha channel
+            # img_bgra[:, :, 3] = 255
+            rotated_bgra = cv2.warpAffine(
+                img_bgra,
+                Mrot,
+                (W_img, H_img),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(0, 0, 0, 0),
+            )
+            rotated = rotated_bgra
 
         Hr, Wr = rotated.shape[:2]
 
@@ -1163,7 +1227,19 @@ def process_image(in_path, out_path):
         outside_bottom = rotated_corners[2]
         inside_bottom = rotated_corners[3]
 
+        # remember the inside edge for later cropping
+        inside_top_x = inside_top[0]
+        inside_bottom_x = inside_bottom[0]
+        if bad_on_left:
+            # inside edge is the LEFT edge
+            outmost_inside_x = max(inside_top_x, inside_bottom_x)
+        else:
+            # inside edge is the RIGHT edge
+            outmost_inside_x = min(inside_top_x, inside_bottom_x)
+
         # ignore the inside edge for perspective transform
+        # Ignore the unknown inside-edge angle for perspective correction.
+        # Use the image boundary as the inside edge.
         if bad_on_left:
             # outside edge is the RIGHT edge
             # inside edge is the LEFT edge
@@ -1253,12 +1329,8 @@ def process_image(in_path, out_path):
                 (0, 0, 255), # red
                 3,
             )
-            name = OUTPUT_DIR / (f"{page_num:03d}.line-1200-rotated-corners.jpg"
-            )
-            cv2.imwrite(
-                str(name),
-                vis,
-            )
+            name = OUTPUT_DIR / (f"{page_num:03d}.line-1200-rotated-corners.tiff")
+            save_image(str(name), vis)
 
 
 
@@ -1416,6 +1488,25 @@ def process_image(in_path, out_path):
 
         warped = crop
 
+
+
+        # 8b. cleanup the inside edge
+        # use outmost_inside_x to remove the half-transparent inside edge
+        if remove_inside_transparent_strip:
+            if bad_on_left:
+                # Inside edge is on the LEFT.
+                # Remove everything from x=0 through outmost_inside_x.
+                crop_x = int(math.ceil(outmost_inside_x))
+                warped = warped[:, crop_x:, :]
+
+            else:
+                # Inside edge is on the RIGHT.
+                # Remove everything from outmost_inside_x through the right edge.
+                crop_x = int(math.floor(outmost_inside_x))
+                warped = warped[:, :crop_x, :]
+
+
+
     else:
         # config.use_three_edge_deskew == False
 
@@ -1503,7 +1594,8 @@ def process_image(in_path, out_path):
         canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
 
     ensure_dir(out_path.parent)
-    cv2.imwrite(out_path, canvas, config.cv2_imwrite_params)
+    # cv2.imwrite(out_path, canvas, config.cv2_imwrite_params)
+    save_image(out_path, canvas)
     # print(f"writing {out_path}")
 
 

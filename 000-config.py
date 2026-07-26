@@ -78,6 +78,11 @@ cv2_imwrite_params = [
     # cv2.IMWRITE_TIFF_COMPRESSION, cv2.IMWRITE_TIFF_COMPRESSION_ZSTD,
 ]
 
+pil_image_save_kwargs = dict(
+    format="TIFF",
+    compression="tiff_adobe_deflate",
+)
+
 
 
 # compressed image format
