@@ -139,9 +139,9 @@ crop_even_box = (0, 0, crop_size[0], crop_size[1])
 # for graphics, we want lowthresh=0.05
 # to preserve darkgray and lightgray areas in grayscale graphics
 do_level = True
-# lowthresh, highthresh = 0.05, 0.95
-# lowthresh, highthresh = 0.2, 0.8
-lowthresh, highthresh = 0.3, 0.7
+# lowthresh = 0.05
+# lowthresh = 0.2
+lowthresh = 0.3
 
 
 

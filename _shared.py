@@ -84,6 +84,16 @@ def load_config(config_path=config_path):
         config.rotated_margined_scan_y
     ) = get_rotated_x_y(config, config.margined_scan_x, config.margined_scan_y)
 
+    # thresholds for color leveling should be symmetrical:
+    # lowthresh + highthresh == 1
+    # so it is enough to specify only the low threshold
+    if hasattr(config, "lowthresh") and not hasattr(config, "highthresh"):
+        config.highthresh = 1 - config.lowthresh
+    if hasattr(config, "text_lowthresh") and not hasattr(config, "text_highthresh"):
+        config.text_highthresh = 1 - config.text_lowthresh
+    if hasattr(config, "images_lowthresh") and not hasattr(config, "images_highthresh"):
+        config.images_highthresh = 1 - config.images_lowthresh
+
     # TODO validate config
     # if orientation_is_portrait and (scan_x < scan_y) and do_rotate:
 
