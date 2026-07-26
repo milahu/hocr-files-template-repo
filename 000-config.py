@@ -127,6 +127,13 @@ crop_even_box = (0, 0, crop_size[0], crop_size[1])
 
 # Config for 0663-level.py
 
+# TODO use different thresholds for text and images
+# a too low text_lowthresh produces too much noise in black areas
+# a too high images_lowthresh causes excessive tonal clipping
+# use the OCR result to separate text and image regions
+text_lowthresh = 0.3
+images_lowthresh = 0.05
+
 # --- Level / brightness normalization ---
 # leveling is useful to remove noise
 # from black and white areas in text
