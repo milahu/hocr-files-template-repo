@@ -14,6 +14,9 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 import argparse
 import shlex
+import shutil
+import json
+import time
 
 import cv2
 import numpy as np
@@ -30,6 +33,9 @@ config = load_config()
 
 
 INPUT_DIR = Path("040-scan-pages")
+
+# REVIEW_DIR = Path("041-broken-scan-review")
+REVIEW_DIR = Path(Path(__file__).stem + f".{int(time.time())}")
 
 # Detection parameters
 WHITE_THRESHOLD = 245
@@ -668,6 +674,93 @@ def print_runs(runs, filename_of_page):
                     print(f"    {get_image_viewer_argstr(neighbor_filenames, config)}")
 
 
+def prepare_review_dirs(runs, filename_of_page):
+    if not runs:
+        print("no runs")
+        return
+
+    # print image viewer command to view all pages of this parity
+    sample_page_num = get_page_num(runs[0].filenames[0])
+    is_odd_pages = (sample_page_num % 2 == 1)
+    parity_name = "odd" if is_odd_pages else "even"
+
+    # strongest artifacts first
+    runs.sort(
+        key=lambda c: c.confidence,
+        reverse=True
+    )
+
+    REVIEW_DIR.mkdir(parents=True, exist_ok=True)
+
+    for run_idx, run in enumerate(runs, start=1):
+        run_dir = REVIEW_DIR / f"{parity_name}-pages.run-{run_idx:03d}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        # Strong detections
+        filenames = {
+            Path(d["filename"])
+            for d in run.strong_detections
+        }
+
+        # Weak/recovered detections
+        filenames.update(
+            Path(d["filename"])
+            for d in run.weak_detections
+        )
+
+        # Neighbor pages, useful for manual comparison
+        pages = sorted(set(run.pages))
+        neighbor_pages = get_neighbor_pages(
+            pages,
+            radius=1,
+        )
+
+        for page_num in neighbor_pages:
+            filename = filename_of_page.get(page_num)
+            if filename is not None:
+                filenames.add(Path(filename))
+
+        for filename in sorted(filenames):
+            destination = run_dir / filename.name
+
+            # # Copy source image into review directory.
+            # shutil.copy2(filename, destination)
+
+            # Move source image into review directory.
+            # true positive matches
+            # can simply be removed from the review directory
+            # false positive matches
+            # must be moved back to the source directory
+            shutil.move(filename, destination)
+
+        data = {
+            "x": float(run.median_x),
+            "pages": sorted(set(run.pages)),
+            "num_pages": len(set(run.pages)),
+            "strong_pages": sorted(set(run.strong_pages)),
+            "weak_pages": sorted({
+                d["page_num"]
+                for d in run.weak_detections
+            }),
+            "height_ratio.min": min(run.height_ratios),
+            "height_ratio.mean": float(np.mean(run.height_ratios)),
+            "height_ratio.median": float(np.median(run.height_ratios)),
+            "height_ratio.max": max(run.height_ratios),
+            "strength.median": float(np.median(run.strengths)),
+        }
+
+        print(f"run {run_idx}: {json.dumps(data)}")
+        print(f"  review images:")
+        print(f"    {config.image_viewer} {run_dir}")
+        print(f"  restore images:")
+        print(f"    mv {run_dir}/* {INPUT_DIR} && rmdir {run_dir} && rmdir {REVIEW_DIR}")
+        # we assume the user knows how to remove images
+        # we dont print the "remove images" command here
+        # so the user cannot accidentally copy-paste the "remove images" command
+        # print(f"  remove images:")
+        # print(f"    rm -rf {run_dir}")
+
+
 def height_profile_score(run):
     pages = list(
         zip(
@@ -859,16 +952,18 @@ def main():
     if odd_files:
         print()
         print(f"Processing odd pages")
-        odd_groups, odd_detections = process_pass(odd_files, filename_of_page)
+        runs, detections = process_pass(odd_files, filename_of_page)
         # print("runs:")
-        print_runs(odd_groups, filename_of_page)
+        # print_runs(runs, filename_of_page)
+        prepare_review_dirs(runs, filename_of_page)
 
     if even_files:
         print()
         print(f"Processing even pages")
         runs, detections = process_pass(even_files, filename_of_page)
         # print("runs:")
-        print_runs(runs, filename_of_page)
+        # print_runs(runs, filename_of_page)
+        prepare_review_dirs(runs, filename_of_page)
 
 
 if __name__ == "__main__":
