@@ -1400,19 +1400,24 @@ def process_image(in_path, out_path):
                 math.dist((x0_top, outside_top[1]), (x1_top, outside_top[1]))
             ))
 
-        # src = np.float32([
-        #     [x0_top, outside_top[1]],
-        #     [x1_top, outside_top[1]],
-        #     [x1_bottom, outside_bottom[1]],
-        #     [x0_bottom, outside_bottom[1]],
-        # ])
-
-        src = np.float32([
-            inside_top,
-            outside_top,
-            outside_bottom,
-            inside_bottom,
-        ])
+        if bad_on_left:
+            # inside = LEFT
+            # outside = RIGHT
+            src = np.float32([
+                inside_top,       # TL
+                outside_top,      # TR
+                outside_bottom,   # BR
+                inside_bottom,    # BL
+            ])
+        else:
+            # outside = LEFT
+            # inside = RIGHT
+            src = np.float32([
+                outside_top,      # TL
+                inside_top,       # TR
+                inside_bottom,    # BR
+                outside_bottom,   # BL
+            ])
 
         dst = np.float32([
             [0, 0],
