@@ -938,7 +938,8 @@ def process_image(in_path, out_path):
             img,
             Mrot,
             (W_img, H_img),
-            borderValue=(255,255,255)
+            # borderValue=(255,255,255) # white
+            borderValue=(128,128,128) # gray
         )
 
         Hr, Wr = rotated.shape[:2]
