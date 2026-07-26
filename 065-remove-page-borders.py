@@ -1228,14 +1228,8 @@ def process_image(in_path, out_path):
         inside_bottom = rotated_corners[3]
 
         # remember the inside edge for later cropping
-        inside_top_x = inside_top[0]
-        inside_bottom_x = inside_bottom[0]
-        if bad_on_left:
-            # inside edge is the LEFT edge
-            outmost_inside_x = max(inside_top_x, inside_bottom_x)
-        else:
-            # inside edge is the RIGHT edge
-            outmost_inside_x = min(inside_top_x, inside_bottom_x)
+        actual_inside_top = rotated_corners[0].copy()
+        actual_inside_bottom = rotated_corners[3].copy()
 
         # ignore the inside edge for perspective transform
         # Ignore the unknown inside-edge angle for perspective correction.
@@ -1331,6 +1325,26 @@ def process_image(in_path, out_path):
             )
             name = OUTPUT_DIR / (f"{page_num:03d}.line-1200-rotated-corners.tiff")
             save_image(str(name), vis)
+
+
+
+        # 7b. cleanup the inside edge
+        # use outmost_inside_x to remove the half-transparent inside edge
+        # if remove_inside_transparent_strip:
+        if 0:
+            if bad_on_left:
+                # odd page
+                # Inside edge is on the LEFT.
+                # Remove everything from x=0 through outmost_inside_x.
+                crop_x = int(math.ceil(outmost_inside_x))
+                rotated = rotated[:, crop_x:, :]
+
+            else:
+                # even page
+                # Inside edge is on the RIGHT.
+                # Remove everything from outmost_inside_x through the right edge.
+                crop_x = int(math.floor(outmost_inside_x))
+                rotated = rotated[:, :crop_x, :]
 
 
 
@@ -1449,6 +1463,28 @@ def process_image(in_path, out_path):
                 f"expected_w={expected_w}",
                 f"expected_h={expected_h}",
             )
+
+        actual_inside_warped = cv2.perspectiveTransform(
+            np.array([[
+                actual_inside_top,
+                actual_inside_bottom,
+            ]], dtype=np.float32),
+            M,
+        )[0]
+
+        actual_inside_top_warped = actual_inside_warped[0]
+        actual_inside_bottom_warped = actual_inside_warped[1]
+
+        inside_top_x = actual_inside_top_warped[0]
+        inside_bottom_x = actual_inside_bottom_warped[0]
+        if bad_on_left:
+            # odd page
+            # inside edge is the LEFT edge
+            outmost_inside_x = max(inside_top_x, inside_bottom_x)
+        else:
+            # even page
+            # inside edge is the RIGHT edge
+            outmost_inside_x = min(inside_top_x, inside_bottom_x)
 
         # crop = rotated[
         #     0:expected_h,
