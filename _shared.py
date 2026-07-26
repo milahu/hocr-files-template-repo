@@ -106,6 +106,8 @@ def load_config(config_path=config_path):
 
 def get_page_num(path):
     # parse page number: "001.jpg" -> 1
+    if not isinstance(path, Path):
+        path = Path(path)
     m = re.match(r"^(\d+)", path.name)
     # page_num = int(m.group(1)) if m else 0
     page_num = int(m.group(1)) # can throw
