@@ -60,7 +60,7 @@ def apply_level(img: np.ndarray, low: float = 0.2, high: float = 0.9) -> np.ndar
 # --- Worker ------------------------------------------------------------------
 def process_image(image_path: Path) -> str:
     filename = image_path.name
-    page_number = int(filename.split(".")[0]) # "001.jpg" -> 1
+    page_num = get_page_num(filename)
     output_path = dst / filename
     r'''
     if output_path.exists():
@@ -75,7 +75,14 @@ def process_image(image_path: Path) -> str:
 
     # Level (contrast stretch)
     if config.do_level:
-        img = apply_level(img, config.lowthresh, config.highthresh)
+
+        # TODO use the OCR result to separate text and image regions
+        if page_num in config.image_pages:
+            lowthresh, highthresh = config.images_lowthresh, config.images_highthresh
+        else:
+            lowthresh, highthresh = config.text_lowthresh, config.text_highthresh
+
+        img = apply_level(img, lowthresh, highthresh)
 
     # Save image
     cv2.imwrite(str(output_path), img)
