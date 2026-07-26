@@ -696,6 +696,23 @@ if 1:
         return float(xi), float(yi)
 
 
+def transform_points_affine(points, M):
+    """
+    Transform Nx2 points using a 2x3 OpenCV affine matrix.
+    """
+    points = np.asarray(points, dtype=np.float32)
+    ones = np.ones(
+        (points.shape[0], 1),
+        dtype=np.float32,
+    )
+    points_h = np.hstack([
+        points,
+        ones,
+    ])
+    transformed = points_h @ M.T
+    return transformed
+
+
 def process_image(in_path, out_path):
     """
     Robust page extraction that handles missing top (or bottom) edges.
@@ -896,6 +913,40 @@ def process_image(in_path, out_path):
 
 
 
+    # page margin
+    outside_top = intersect_lines(
+        outside_line,
+        top_line
+    )
+    outside_bottom = intersect_lines(
+        outside_line,
+        bottom_line
+    )
+
+    # also calculate inside_top and inside_bottom
+    # inside_line is simply the inside edge of the source image
+    # y1 = 0; y2 = y_max
+    # on odd pages: x1 = x2 = 0 # inside is left
+    # on even pages: x1 = x2 = x_max # inside is right
+    if bad_on_left:
+        # Odd page:
+        # binding/inside edge is the LEFT image boundary
+        inside_x = 0.0
+    else:
+        # Even page:
+        # binding/inside edge is the RIGHT image boundary
+        inside_x = float(W_img - 1)
+    inside_top = intersect_line_with_vertical_boundary(
+        top_line,
+        inside_x
+    )
+    inside_bottom = intersect_line_with_vertical_boundary(
+        bottom_line,
+        inside_x
+    )
+
+
+
     if DEBUG:
         vis = img.copy()
         # margin range
@@ -938,37 +989,6 @@ def process_image(in_path, out_path):
                     [W_img, H_img - edge_search_height_px], # bottom right
                 ], np.int32)
         cv2.polylines(vis, [pts], False, (0,255,0), 3) # green
-        # page margin
-        outside_top = intersect_lines(
-            outside_line,
-            top_line
-        )
-        outside_bottom = intersect_lines(
-            outside_line,
-            bottom_line
-        )
-
-        # also calculate inside_top and inside_bottom
-        # inside_line is simply the inside edge of the source image
-        # y1 = 0; y2 = y_max
-        # on odd pages: x1 = x2 = 0 # inside is left
-        # on even pages: x1 = x2 = x_max # inside is right
-        if bad_on_left:
-            # Odd page:
-            # binding/inside edge is the LEFT image boundary
-            inside_x = 0.0
-        else:
-            # Even page:
-            # binding/inside edge is the RIGHT image boundary
-            inside_x = float(W_img - 1)
-        inside_top = intersect_line_with_vertical_boundary(
-            top_line,
-            inside_x
-        )
-        inside_bottom = intersect_line_with_vertical_boundary(
-            bottom_line,
-            inside_x
-        )
 
         # Margin range
         if 0:
@@ -1044,6 +1064,13 @@ def process_image(in_path, out_path):
         name = OUTPUT_DIR / f"{page_num:03d}.line-0900-fit-lines-ransac.jpg"
         # print(f"writing {name}")
         cv2.imwrite(name, vis)
+
+    src_corners = np.float32([
+        inside_top,
+        outside_top,
+        outside_bottom,
+        inside_bottom,
+    ])
 
 
 
@@ -1122,66 +1149,65 @@ def process_image(in_path, out_path):
 
         Hr, Wr = rotated.shape[:2]
 
+
+
+        # also rotate the detected edges
+
+        rotated_corners = transform_points_affine(
+            src_corners,
+            Mrot,
+        )
+
+        inside_top = rotated_corners[0]
+        outside_top = rotated_corners[1]
+        outside_bottom = rotated_corners[2]
+        inside_bottom = rotated_corners[3]
+
+        # ignore the inside edge for perspective transform
+        if bad_on_left:
+            # outside edge is the RIGHT edge
+            # inside edge is the LEFT edge
+            inside_top[0] = 0
+            inside_bottom[0] = 0
+        else:
+            # outside edge is the LEFT edge
+            # inside edge is the RIGHT edge
+            inside_top[0] = Wr - 1
+            inside_bottom[0] = Wr - 1
+
+        top_width = np.linalg.norm(
+            outside_top - inside_top
+        )
+        bottom_width = np.linalg.norm(
+            outside_bottom - inside_bottom
+        )
+        left_height = np.linalg.norm(
+            inside_bottom - inside_top
+        )
+        right_height = np.linalg.norm(
+            outside_bottom - outside_top
+        )
+
+        # expected size after rotation
+        expected_w = int(round(
+            (top_width + bottom_width) / 2.0
+        ))
+        expected_h = int(round(
+            (left_height + right_height) / 2.0
+        ))
+        if 0:
+            # Or, if you want the height to be determined specifically by the outside edge
+            # The average is usually more stable, though.
+            expected_h = int(round(
+                right_height
+            ))
+
         if DEBUG:
             print("line 580: rotated size", Wr, Hr)
 
         # img = rotated # ?
 
 
-
-        # re-detect lines in the rotated image
-
-        # # gray, mask, contours = get_gray_mask_contours(img, dbgdir)
-        # gray, mask, contours = get_gray_mask_contours(rotated, dbgdir)
-
-        # if 1:
-        #     top_angle2 = horizontal_line_angle(top_line)
-        #     bottom_angle2 = horizontal_line_angle(bottom_line)
-        #     outside_angle2 = vertical_line_angle(outside_line)
-
-        #     if DEBUG:
-        #         print(
-        #             f"line 620: after rotation and re-fitting: "
-        #             f"top_angle2={top_angle2:.3f} "
-        #             f"bottom_angle2={bottom_angle2:.3f} "
-        #             f"outside_angle2={outside_angle2:.3f}"
-        #         )
-
-        # if not contours:
-        #     print(f"line 630: Warning: no contours found in {in_path}")
-        #     return
-
-        # page_contour = max(contours, key=cv2.contourArea)
-
-
-
-        # 7. rescale
-
-        # top_pts, bottom_pts, outside_pts = split_edge_candidates(
-        #     page_contour,
-        #     bad_on_left
-        # )
-
-        # top_line = fit_line_ransac(top_pts)[:4]
-        # bottom_line = fit_line_ransac(bottom_pts)[:4]
-        # outside_line = fit_line_ransac(outside_pts)[:4]
-
-        # # fixed
-        # # # FIXME H_img is wrong
-        # # expected_h = H_img
-        # # expected_w = int(round(ASPECT * expected_h))
-
-        # vx, vy, x0, y0 = outside_line
-
-        outside_top = intersect_lines(
-            outside_line,
-            top_line
-        )
-
-        outside_bottom = intersect_lines(
-            outside_line,
-            bottom_line
-        )
 
         if 0:
             # approximated page height
@@ -1215,92 +1241,24 @@ def process_image(in_path, out_path):
         # # expected_w = int(round(expected_h * ASPECT))
         # expected_w = int(round(page_height * ASPECT))
 
-
-
-        # After rotation
-        # Instead of ...
-        # # gray, mask, contours = get_gray_mask_contours(rotated, dbgdir)
-        # # page_contour = max(contours, key=cv2.contourArea)
-        # # top_pts, bottom_pts, outside_pts = split_edge_candidates(
-        # #     page_contour,
-        # #     bad_on_left
-        # # )
-        # I would literally do
-
-        gray = cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY)
-
-        _, mask = cv2.threshold(
-            gray,
-            0,
-            255,
-            cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-
-        if bad_on_left:
-            outside_pts = detect_edge_points(
-                gray,
-                mask,
-                EDGE_RIGHT,
-                edge_search_width_px,
+        if DEBUG:
+            vis = rotated.copy()
+            pts_rotated = np.round(
+                rotated_corners
+            ).astype(np.int32)
+            cv2.polylines(
+                vis,
+                [pts_rotated],
+                True,
+                (0, 0, 255), # red
+                3,
             )
-        else:
-            outside_pts = detect_edge_points(
-                gray,
-                mask,
-                EDGE_LEFT,
-                edge_search_width_px,
+            name = OUTPUT_DIR / (f"{page_num:03d}.line-1200-rotated-corners.jpg"
             )
-
-        top_pts = detect_edge_points(
-            gray,
-            mask,
-            EDGE_TOP,
-            edge_search_height_px,
-        )
-
-        bottom_pts = detect_edge_points(
-            gray,
-            mask,
-            EDGE_BOTTOM,
-            edge_search_height_px,
-        )
-
-        top_pts = reject_outliers_horizontal(top_pts)
-        bottom_pts = reject_outliers_horizontal(bottom_pts)
-        outside_pts = reject_outliers_vertical(outside_pts)
-
-        # if DEBUG:
-        if 0:
-            vis = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-            # margin range: green
-            if bad_on_left:
-                # outside edge is right
-                # no line on the left
-                pts = np.array([
-                    [0, edge_search_height_px], # top left
-                    [Wr - edge_search_width_px, edge_search_height_px], # top right
-                    [Wr - edge_search_width_px, Hr - edge_search_height_px], # bottom right
-                    [0, Hr - edge_search_height_px], # bottom left
-                ], np.int32)
-            else:
-                # outside edge is left
-                # no line on the right
-                pts = np.array([
-                    [Wr, edge_search_height_px], # top right
-                    [edge_search_width_px, edge_search_height_px], # top left
-                    [edge_search_width_px, Hr - edge_search_height_px], # bottom left
-                    [Wr, Hr - edge_search_height_px], # bottom right
-                ], np.int32)
-            for x, y in outside_pts.astype(int):
-                cv2.circle(vis, (x, y), 2, (0, 0, 255), -1)
-            name = OUTPUT_DIR / f"{page_num:03d}.line-1240-outside_pts.reject_outliers_vertical.jpg"
-            cv2.imwrite(name, vis)
-
-        top_line = fit_line_ransac(top_pts)[:4]
-        bottom_line = fit_line_ransac(bottom_pts)[:4]
-        outside_line = fit_line_ransac(outside_pts)[:4]
-
-        # ... Then the search margins are enforced both before and after rotation.
+            cv2.imwrite(
+                str(name),
+                vis,
+            )
 
 
 
@@ -1370,19 +1328,25 @@ def process_image(in_path, out_path):
                 math.dist((x0_top, outside_top[1]), (x1_top, outside_top[1]))
             ))
 
+        # src = np.float32([
+        #     [x0_top, outside_top[1]],
+        #     [x1_top, outside_top[1]],
+        #     [x1_bottom, outside_bottom[1]],
+        #     [x0_bottom, outside_bottom[1]],
+        # ])
 
         src = np.float32([
-            [x0_top, outside_top[1]],
-            [x1_top, outside_top[1]],
-            [x1_bottom, outside_bottom[1]],
-            [x0_bottom, outside_bottom[1]],
+            inside_top,
+            outside_top,
+            outside_bottom,
+            inside_bottom,
         ])
 
         dst = np.float32([
-            [0,0],
-            [expected_w-1,0],
-            [expected_w-1,expected_h-1],
-            [0,expected_h-1],
+            [0, 0],
+            [expected_w - 1, 0],
+            [expected_w - 1, expected_h - 1],
+            [0, expected_h - 1],
         ])
 
         M = cv2.getPerspectiveTransform(src, dst)
