@@ -6,8 +6,8 @@ color_pages = []
 
 # pages with images (grayscale or color)
 # TODO use the OCR result to separate text and image regions
-image_pages = []
-# image_pages = color_pages
+# default: infer image_pages from color_pages
+# image_pages = []
 
 # TODO rename all mm sizes to scan_x_mm etc
 

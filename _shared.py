@@ -98,6 +98,10 @@ def load_config(config_path=config_path):
     if hasattr(config, "images_lowthresh") and not hasattr(config, "images_highthresh"):
         config.images_highthresh = 1 - config.images_lowthresh
 
+    if not hasattr(config, "image_pages"):
+        # infer image_pages from color_pages
+        config.image_pages = config.color_pages
+
     # TODO validate config
     # if orientation_is_portrait and (scan_x < scan_y) and do_rotate:
 
