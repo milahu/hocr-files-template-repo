@@ -11,6 +11,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import cv2
 import psutil
 import numpy as np
+from tqdm import tqdm
 
 from _shared import (
     load_config,
@@ -61,9 +62,10 @@ def process_image(image_path: Path) -> str:
     filename = image_path.name
     page_number = int(filename.split(".")[0]) # "001.jpg" -> 1
     output_path = dst / filename
+    r'''
     if output_path.exists():
-        print(f"keeping {output_path}")
-        return
+        output_path.unlink()
+    '''
 
     # Load
     img = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
@@ -77,7 +79,7 @@ def process_image(image_path: Path) -> str:
 
     # Save image
     cv2.imwrite(str(output_path), img)
-    print(f"writing {output_path}")
+    # print(f"writing {output_path}")
 
 
 def try_process_image(*args):
@@ -91,17 +93,31 @@ def try_process_image(*args):
 
 
 # --- Parallel execution ------------------------------------------------------
-if __name__ == "__main__":
+def main():
     t1 = time.time()
     images = sorted(src.glob(f"*.{config.scan_format}"))
     if not images:
         print("No input files found.")
         exit(0)
 
+    images = remove_done_files(images, dst)
+    if not images:
+        print("nothing to do")
+        return
+
     num_workers = psutil.cpu_count(logical=False) or 1
     print(f"Using {num_workers} workers...")
 
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+    tqdm_kwargs = dict(
+        total=len(images),
+        ncols=80,
+        unit="page",
+    )
+
+    with (
+        ProcessPoolExecutor(max_workers=num_workers) as executor,
+        tqdm(**tqdm_kwargs) as pbar,
+    ):
         futures = {executor.submit(try_process_image, img): img for img in images}
         for future in as_completed(futures):
             err = future.result()
@@ -110,6 +126,11 @@ if __name__ == "__main__":
                 e, tb = err
                 print(f"\nException in worker:\n{tb}")
                 raise e
+            pbar.update(1)
 
     t2 = time.time()
     print(f"done {len(images)} pages in {int(t2 - t1)} seconds using {num_workers} workers")
+
+
+if __name__ == "__main__":
+    main()
