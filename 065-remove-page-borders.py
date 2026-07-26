@@ -137,6 +137,26 @@ def intersect_lines(l1, l2):
     yi = y1 + t1 * vy1
     return float(xi), float(yi)
 
+def intersect_line_with_vertical_boundary(line, x):
+    """
+    Intersect a parametric line
+
+        (x0, y0) + t * (vx, vy)
+
+    with the vertical line
+
+        x = constant
+
+    Returns (x, y).
+    """
+    vx, vy, x0, y0 = map(float, line)
+    if abs(vx) < 1e-12:
+        raise ValueError("Line is parallel to vertical boundary")
+    t = (x - x0) / vx
+    y = y0 + t * vy
+    return np.array([x, y], dtype=np.float32)
+
+
 def build_affine_without_shear(pt_v_top, pt_v_bot, expected_w, expected_h, bad_on_left, img, dbgdir=None):
     """
     Build a source triangle that enforces orthogonal page axes (no shear) using:
@@ -709,8 +729,8 @@ def process_image(in_path, out_path):
     # expected_w = int(round(ASPECT * H_img))
     # expected_h = H_img
 
-    dbgdir = OUTPUT_DIR.joinpath("debug", f"{page_num:03d}")
-    if DEBUG: ensure_dir(dbgdir)
+    # dbgdir = OUTPUT_DIR.joinpath("debug", f"{page_num:03d}")
+    # if DEBUG: ensure_dir(dbgdir)
 
 
 
@@ -866,6 +886,164 @@ def process_image(in_path, out_path):
     top_line = fit_line_ransac(top_pts)[:4]
     bottom_line = fit_line_ransac(bottom_pts)[:4]
     outside_line = fit_line_ransac(outside_pts)[:4]
+
+    if 0:
+        # debug
+        # float(vx), float(vy), float(x0), float(y0)
+        print(f"top_line={top_line}")
+        print(f"bottom_line={bottom_line}")
+        print(f"outside_line={outside_line}")
+
+
+
+    if DEBUG:
+        vis = img.copy()
+        # margin range
+        if bad_on_left:
+            # outside edge is right
+            # no line on the left
+            if 0:
+                # Wr, Hr
+                pts = np.array([
+                    [0, edge_search_height_px], # top left
+                    [Wr - edge_search_width_px, edge_search_height_px], # top right
+                    [Wr - edge_search_width_px, Hr - edge_search_height_px], # bottom right
+                    [0, Hr - edge_search_height_px], # bottom left
+                ], np.int32)
+            else:
+                # W_img, H_img
+                pts = np.array([
+                    [0, edge_search_height_px], # top left
+                    [W_img - edge_search_width_px, edge_search_height_px], # top right
+                    [W_img - edge_search_width_px, H_img - edge_search_height_px], # bottom right
+                    [0, H_img - edge_search_height_px], # bottom left
+                ], np.int32)
+        else:
+            # outside edge is left
+            # no line on the right
+            if 0:
+                # Wr, Hr
+                pts = np.array([
+                    [Wr, edge_search_height_px], # top right
+                    [edge_search_width_px, edge_search_height_px], # top left
+                    [edge_search_width_px, Hr - edge_search_height_px], # bottom left
+                    [Wr, Hr - edge_search_height_px], # bottom right
+                ], np.int32)
+            else:
+                # W_img, H_img
+                pts = np.array([
+                    [W_img, edge_search_height_px], # top right
+                    [edge_search_width_px, edge_search_height_px], # top left
+                    [edge_search_width_px, H_img - edge_search_height_px], # bottom left
+                    [W_img, H_img - edge_search_height_px], # bottom right
+                ], np.int32)
+        cv2.polylines(vis, [pts], False, (0,255,0), 3) # green
+        # page margin
+        outside_top = intersect_lines(
+            outside_line,
+            top_line
+        )
+        outside_bottom = intersect_lines(
+            outside_line,
+            bottom_line
+        )
+
+        # also calculate inside_top and inside_bottom
+        # inside_line is simply the inside edge of the source image
+        # y1 = 0; y2 = y_max
+        # on odd pages: x1 = x2 = 0 # inside is left
+        # on even pages: x1 = x2 = x_max # inside is right
+        if bad_on_left:
+            # Odd page:
+            # binding/inside edge is the LEFT image boundary
+            inside_x = 0.0
+        else:
+            # Even page:
+            # binding/inside edge is the RIGHT image boundary
+            inside_x = float(W_img - 1)
+        inside_top = intersect_line_with_vertical_boundary(
+            top_line,
+            inside_x
+        )
+        inside_bottom = intersect_line_with_vertical_boundary(
+            bottom_line,
+            inside_x
+        )
+
+        # Margin range
+        if 0:
+            # expand the binding edge to expected_w
+            if bad_on_left:
+                # outside edge is the RIGHT edge
+                x1_top = outside_top[0]
+                x1_bottom = outside_bottom[0]
+                x0_top = x1_top - expected_w
+                x0_bottom = x1_bottom - expected_w
+            else:
+                # outside edge is the LEFT edge
+                x0_top = outside_top[0]
+                x0_bottom = outside_bottom[0]
+                x1_top = x0_top + expected_w
+                x1_bottom = x0_bottom + expected_w
+        else:
+            # dont expand the binding edge to expected_w
+            # use only the detected page edges
+            if bad_on_left:
+                # outside edge is right
+                x1_top = outside_top[0]
+                x1_bottom = outside_bottom[0]
+                # binding edge
+                # find leftmost detected page boundary
+                # x0_top = np.min(top_pts[:,0])
+                # x0_bottom = np.min(bottom_pts[:,0])
+                x0_top = 0
+                x0_bottom = 0
+            else:
+                # outside edge is left
+                x0_top = outside_top[0]
+                x0_bottom = outside_bottom[0]
+                # binding edge
+                # find rightmost detected page boundary
+                # x1_top = np.max(top_pts[:,0])
+                # x1_bottom = np.max(bottom_pts[:,0])
+                if 0:
+                    # Wr, Hr
+                    x1_top = Wr - 1
+                    x1_bottom = Wr - 1
+                else:
+                    # W_img, H_img
+                    x1_top = W_img - 1
+                    x1_bottom = W_img - 1
+
+        # Detected page quadrilateral
+        if 0:
+            pts = np.array([
+                # top left: bad: y=outside_top[1] is wrong
+                # this would have to be min(top_line) or so
+                [x0_top, outside_top[1]], # top left
+                [x1_top, outside_top[1]], # top right: good
+                [x1_bottom, outside_bottom[1]], # bottom right: good
+                [x0_bottom, outside_bottom[1]], # bottom left: bad: y=outside_bottom[1] is wrong
+            ], np.int32)
+        elif 0:
+            pts = np.array([
+                [x0_top, outside_top[1]],
+                [x1_top, outside_top[1]],
+                [x1_bottom, outside_bottom[1]],
+                [x0_bottom, outside_bottom[1]],
+            ], np.int32)
+        elif 1:
+            pts = np.round(np.array([
+                inside_top,
+                outside_top,
+                outside_bottom,
+                inside_bottom,
+            ], dtype=np.float32)).astype(np.int32)
+        cv2.polylines(vis, [pts], True, (0,0,255), 3) # red
+
+        name = OUTPUT_DIR / f"{page_num:03d}.line-0900-fit-lines-ransac.jpg"
+        # print(f"writing {name}")
+        cv2.imwrite(name, vis)
 
 
 
@@ -1091,7 +1269,8 @@ def process_image(in_path, out_path):
         bottom_pts = reject_outliers_horizontal(bottom_pts)
         outside_pts = reject_outliers_vertical(outside_pts)
 
-        if DEBUG:
+        # if DEBUG:
+        if 0:
             vis = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
             # margin range: green
             if bad_on_left:
@@ -1114,7 +1293,8 @@ def process_image(in_path, out_path):
                 ], np.int32)
             for x, y in outside_pts.astype(int):
                 cv2.circle(vis, (x, y), 2, (0, 0, 255), -1)
-            cv2.imwrite(f"{page_num:03d}.outside_pts.reject_outliers_vertical.jpg", vis)
+            name = OUTPUT_DIR / f"{page_num:03d}.line-1240-outside_pts.reject_outliers_vertical.jpg"
+            cv2.imwrite(name, vis)
 
         top_line = fit_line_ransac(top_pts)[:4]
         bottom_line = fit_line_ransac(bottom_pts)[:4]
@@ -1228,40 +1408,6 @@ def process_image(in_path, out_path):
                 f"expected_w={expected_w}",
                 f"expected_h={expected_h}",
             )
-
-        if DEBUG:
-            vis = rotated.copy()
-            # margin range: green
-            if bad_on_left:
-                # outside edge is right
-                # no line on the left
-                pts = np.array([
-                    [0, edge_search_height_px], # top left
-                    [Wr - edge_search_width_px, edge_search_height_px], # top right
-                    [Wr - edge_search_width_px, Hr - edge_search_height_px], # bottom right
-                    [0, Hr - edge_search_height_px], # bottom left
-                ], np.int32)
-            else:
-                # outside edge is left
-                # no line on the right
-                pts = np.array([
-                    [Wr, edge_search_height_px], # top right
-                    [edge_search_width_px, edge_search_height_px], # top left
-                    [edge_search_width_px, Hr - edge_search_height_px], # bottom left
-                    [Wr, Hr - edge_search_height_px], # bottom right
-                ], np.int32)
-            cv2.polylines(vis, [pts], False, (0,255,0), 3) # (0,255,0) == green?
-            # page margin: red
-            pts = np.array([
-                [x0_top, outside_top[1]],
-                [x1_top, outside_top[1]],
-                [x1_bottom, outside_bottom[1]],
-                [x0_bottom, outside_bottom[1]],
-            ], np.int32)
-            cv2.polylines(vis, [pts], True, (0,0,255), 3)
-            name = f"{page_num:03d}.crop_debug_rotated_line730.jpg"
-            # print(f"writing {name}")
-            cv2.imwrite(name, vis)
 
         # crop = rotated[
         #     0:expected_h,
