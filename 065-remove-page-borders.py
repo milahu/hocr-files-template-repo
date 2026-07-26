@@ -40,6 +40,17 @@ THRESH_MIN = 200
 remove_inside_transparent_strip = True
 
 
+
+# 8c. remove small gray artifacts along page edges
+
+WHITE_BORDER_WIDTH = 10
+WHITE_TEST_INNER = 10
+WHITE_TEST_OUTER = 20
+WHITE_FRACTION_THRESHOLD = 0.99
+PRACTICALLY_WHITE_THRESHOLD = 250  # for uint8 images
+
+
+
 import os
 import re
 import math
@@ -753,6 +764,103 @@ def save_image(path, image):
         raise ValueError(f"Unsupported image shape: {image.shape}")
 
     pil_image.save(path, **config.pil_image_save_kwargs)
+
+
+def edge_is_white(
+    image,
+    edge,
+    inner_depth=WHITE_TEST_INNER,
+    outer_depth=WHITE_TEST_OUTER,
+    white_threshold=PRACTICALLY_WHITE_THRESHOLD,
+    white_fraction_threshold=WHITE_FRACTION_THRESHOLD,
+):
+    """
+    Return True if the region 10..20 pixels inside an edge is
+    practically white, indicating that page content probably
+    does not reach the page edge.
+
+    The test is based on the fraction of practically-white pixels,
+    rather than average brightness, so a small amount of dark content
+    is not hidden by averaging.
+    """
+
+    h, w = image.shape[:2]
+
+    # Convert to grayscale for the lightness test.
+    if image.ndim == 2:
+        gray = image
+    elif image.shape[2] == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    elif image.shape[2] == 4:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+    else:
+        raise ValueError(f"Unsupported image shape: {image.shape}")
+
+    # note: we exclude corners with `inner_depth:-inner_depth`
+
+    # Make sure the requested strip fits.
+    if edge == "top":
+        if outer_depth > h:
+            return False
+        # strip = gray[inner_depth:outer_depth, :]
+        strip = gray[inner_depth:outer_depth, inner_depth:-inner_depth]
+
+    elif edge == "bottom":
+        if outer_depth > h:
+            return False
+        # strip = gray[h - outer_depth:h - inner_depth, :]
+        strip = gray[h - outer_depth:h - inner_depth, inner_depth:-inner_depth]
+
+    elif edge == "left":
+        if outer_depth > w:
+            return False
+        # strip = gray[:, inner_depth:outer_depth]
+        strip = gray[inner_depth:-inner_depth, inner_depth:outer_depth]
+
+    elif edge == "right":
+        if outer_depth > w:
+            return False
+        # strip = gray[:, w - outer_depth:w - inner_depth]
+        strip = gray[inner_depth:-inner_depth, w - outer_depth:w - inner_depth]
+
+    else:
+        raise ValueError(f"Invalid edge: {edge}")
+
+    if strip.size == 0:
+        return False
+
+    practically_white = strip >= white_threshold
+    white_fraction = np.mean(practically_white)
+
+    if DEBUG:
+        print(f"white_fraction: {white_fraction}")
+
+    return white_fraction >= white_fraction_threshold
+
+
+def paint_white_edge_border(
+    image,
+    edge,
+    border_width=WHITE_BORDER_WIDTH,
+):
+    """
+    Paint a white border inside one edge of the image.
+    """
+
+    if edge == "top":
+        image[:border_width, :, :] = 255
+
+    elif edge == "bottom":
+        image[-border_width:, :, :] = 255
+
+    elif edge == "left":
+        image[:, :border_width, :] = 255
+
+    elif edge == "right":
+        image[:, -border_width:, :] = 255
+
+    else:
+        raise ValueError(f"Invalid edge: {edge}")
 
 
 def process_image(in_path, out_path):
@@ -1545,6 +1653,40 @@ def process_image(in_path, out_path):
                 # Remove everything from outmost_inside_x through the right edge.
                 crop_x = int(math.floor(outmost_inside_x))
                 warped = warped[:, :crop_x, :]
+
+
+
+        # 8c. remove small gray artifacts along page edges
+        #
+        # The perspective transform can leave thin light-gray lines
+        # along the page edges because the detected page boundary
+        # is not perfectly straight.
+        #
+        # However, do NOT paint over page content in borderless printing.
+        #
+        # For each edge:
+        #   - inspect a strip 20..10 pixels inside the page
+        #   - if >= 99% of pixels are practically white,
+        #     assume there is no content near that edge
+        #   - paint a 10-pixel white border inside that edge
+        #
+        # The decision is made independently for each edge.
+
+        # Apply independently to all four edges.
+        for edge in ("top", "bottom", "left", "right"):
+
+            if not edge_is_white(warped, edge):
+                # Content reaches the page edge.
+                # Do not destroy it.
+                if DEBUG:
+                    print(f"white edge cleanup: {edge}: borderless -> KEEP CONTENT")
+            else:
+                # The 10..20 px interior strip is practically white,
+                # so it is safe to remove the gray artifact at the edge.
+                paint_white_edge_border(warped, edge, WHITE_BORDER_WIDTH)
+
+                if DEBUG:
+                    print(f"white edge cleanup: {edge}: white margin -> PAINT {WHITE_BORDER_WIDTH}px")
 
 
 
