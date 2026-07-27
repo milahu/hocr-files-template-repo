@@ -76,8 +76,17 @@ def process_image(image_path: Path) -> str:
     # Level (contrast stretch)
     if config.do_level:
 
+        is_image_page = False
+
+        if isinstance(config.image_pages, list):
+            if page_num in config.image_pages:
+                is_image_page = True
+        elif isinstance(config.image_pages, str):
+            if config.image_pages == "all":
+                is_image_page = True
+
         # TODO use the OCR result to separate text and image regions
-        if page_num in config.image_pages:
+        if is_image_page:
             lowthresh, highthresh = config.images_lowthresh, config.images_highthresh
         else:
             lowthresh, highthresh = config.text_lowthresh, config.text_highthresh
