@@ -35,7 +35,7 @@ def add_remote(name, url):
         ], check=True)
 
 def main():
-    os.chdir(os.path.dirname(__file__))
+    # os.chdir(os.path.dirname(__file__))
     with open(REPOS_FILE) as f:
         for line in f:
             url = line.strip()

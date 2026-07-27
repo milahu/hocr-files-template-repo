@@ -477,7 +477,7 @@ def main(out_epub):
 
 if __name__ == "__main__":
 
-    os.chdir(os.path.dirname(__file__))
+    # os.chdir(os.path.dirname(__file__))
 
     if len(sys.argv) == 1:
         out_epub = None

@@ -21,7 +21,7 @@ import numpy as np
 
 
 # --- Setup -------------------------------------------------------------------
-os.chdir(Path(__file__).resolve().parent)
+# os.chdir(Path(__file__).resolve().parent)
 src = Path("070-deskew")
 bak = Path("070-deskew.bak")
 dst = src # replace source

@@ -22,7 +22,7 @@ keep_tempfiles = True
 def main():
     script_dir = Path(__file__).resolve().parent
     dst = Path(Path(__file__).stem)
-    os.chdir(script_dir)
+    # os.chdir(script_dir)
 
     parser = argparse.ArgumentParser()
     parser.add_argument(

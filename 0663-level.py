@@ -22,7 +22,7 @@ from _shared import (
 
 
 # --- Setup -------------------------------------------------------------------
-os.chdir(Path(__file__).resolve().parent)
+# os.chdir(Path(__file__).resolve().parent)
 src = Path("065-remove-page-borders")
 dst = Path(Path(__file__).stem)
 dst.mkdir(parents=True, exist_ok=True)

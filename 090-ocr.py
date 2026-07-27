@@ -103,7 +103,7 @@ def download_tessdata_best(langs, dst="tessdata_best"):
         raise ValueError("no arguments (example: tessdata_best('eng', 'deu', 'rus'))")
 
     script_dir = Path(__file__).resolve().parent
-    os.chdir(script_dir)
+    # os.chdir(script_dir)
 
     dst = Path(dst)
     cache_dir = Path.home() / ".cache" / "tessdata_best"
@@ -173,7 +173,7 @@ def main():
     global ocr_lang
 
     script_dir = Path(__file__).resolve().parent
-    os.chdir(script_dir)
+    # os.chdir(script_dir)
 
     dst = Path(Path(__file__).stem)
 
@@ -194,7 +194,7 @@ def main():
     download_tessdata_best(ocr_lang.split("+"), tessdata_dir)
 
     # tesseract writes HOCR files with the image paths relative to the workdir
-    os.chdir(dst)
+    # os.chdir(dst)
 
     tessdata_dir = "../" + tessdata_dir
     dst = Path("..") / dst

@@ -34,7 +34,7 @@ def main():
     script_dir = script_path.parent
     dst = Path(script_path.stem)
 
-    os.chdir(script_dir)
+    # os.chdir(script_dir)
 
     src_files = sorted(src.glob("*"))
 

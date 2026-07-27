@@ -42,7 +42,7 @@ from _shared import (
 # -----------------------------------------------------------------------------
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-os.chdir(SCRIPT_DIR)
+# os.chdir(SCRIPT_DIR)
 
 datetime_str = (
     datetime.now()
