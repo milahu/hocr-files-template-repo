@@ -25,7 +25,6 @@ from _shared import (
 # os.chdir(Path(__file__).resolve().parent)
 src = Path("065-remove-page-borders")
 dst = Path(Path(__file__).stem)
-dst.mkdir(parents=True, exist_ok=True)
 
 
 # --- Settings ----------------------------------------------------------------
@@ -110,6 +109,18 @@ def try_process_image(*args):
 
 # --- Parallel execution ------------------------------------------------------
 def main():
+
+    if not config.do_level:
+        print("not leveling")
+        if dst.exists():
+            print("keeping dst")
+            return
+        print("creating symlink from dst to src")
+        dst.symlink_to(src)
+        return
+
+    dst.mkdir(parents=True, exist_ok=True)
+
     t1 = time.time()
     images = sorted(src.glob(f"*.{config.scan_format}"))
     if not images:
