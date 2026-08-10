@@ -155,7 +155,26 @@ do_level = True
 # lowthresh = 0.2
 lowthresh = 0.3
 
+# leveling is too destructive on images and colors
+# so we keep the darkgray text on lightgray background
+do_level = False
+
 
 
 # https://github.com/derf/feh
 image_viewer = "feh"
+
+
+
+# config for 090-ocr.py
+
+ocr_lang = "deu+eng" # german + english
+
+# TODO? remove tessdata_dir in favor of tessdata_cache_dir
+tessdata_dir = "tessdata_best"
+
+tessdata_cache_dir = "$HOME/.cache/tessdata_best"
+
+# file URL format: f"{base_url}/{lang}.traineddata"
+# example file URL: f"{base_url}/eng.traineddata"
+tessdata_base_url = "https://github.com/tesseract-ocr/tessdata_best/raw/main"
