@@ -40,6 +40,10 @@ scale = 300 / config.scan_resolution
 
 hocr_to_epub_fxl = "hocr-to-epub-fxl"
 
+# TODO dont commit
+if 1:
+    hocr_to_epub_fxl = "/home/user/src/archive-hocr-tools/bin/hocr-to-epub-fxl"
+
 args = [
     hocr_to_epub_fxl,
     "--output", str(dst),
