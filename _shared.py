@@ -68,6 +68,27 @@ def load_config(config_path=config_path):
         config.rotated_scan_y
     ) = get_rotated_x_y(config, config.scan_x, config.scan_y)
 
+    (
+        config.page_width_mm,
+        config.page_height_mm
+    ) = (
+        config.rotated_scan_x,
+        config.rotated_scan_y
+    )
+
+    def px_of_mm(mm, dpi):
+        return mm * dpi / 25.4
+
+    dpi = config.scan_resolution
+
+    (
+        config.page_width_px,
+        config.page_height_px
+    ) = (
+        px_of_mm(config.page_width_mm, dpi),
+        px_of_mm(config.page_height_mm, dpi)
+    )
+
     config.rotated_scan_aspect = config.rotated_scan_x / config.rotated_scan_y
 
     config.margined_scan_x = min(
