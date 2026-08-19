@@ -57,6 +57,7 @@ import os
 import re
 import math
 import random
+import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
@@ -1816,6 +1817,26 @@ def main():
     if not files:
         print("nothing to do")
         return
+
+    dst = OUTPUT_DIR
+    content_files = []
+    extra_files = []
+    for f in files:
+        page_num = get_page_num(f)
+        if 1 <= page_num <= config.num_pages:
+            # process content pages
+            content_files.append(f)
+        else:
+            # copy extra pages: book cover, etc
+            extra_files.append(f)
+    # copy extra pages: book cover, etc
+    if extra_files:
+        print(f"copying {len(extra_files)} extra pages")
+        for f in extra_files:
+            f_dst = dst / f.name
+            shutil.copy(f, f_dst)
+    # process only content files
+    files = content_files
 
     num_workers = psutil.cpu_count(logical=False) or 1
 
