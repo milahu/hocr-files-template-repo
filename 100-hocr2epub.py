@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+import shlex
 from datetime import datetime
 from pathlib import Path
 
