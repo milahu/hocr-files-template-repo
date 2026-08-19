@@ -34,11 +34,12 @@ THRESH_MIN = 200
 # if we remove the dirty inside edge
 # then we remove a small rectangle from the inside edge
 # to get a straight inside edge (vertical)
-# remove_inside_transparent_strip = True
+remove_inside_transparent_strip = True
 #
+# FIXME this produces black triangles on the inside edges
 # if we keep the dirty inside edge
 # then there is a small transparent rectangle inside of the inside edge
-remove_inside_transparent_strip = False
+# remove_inside_transparent_strip = False
 
 
 
