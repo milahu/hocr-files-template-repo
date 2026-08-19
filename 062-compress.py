@@ -220,68 +220,74 @@ def process_image(args):
 
 # -----------------------------------------------------------------------------
 
-files = [
-    f
-    for f in sorted(src.glob("*"))
-    # if re.fullmatch(rf"\d+\.{re.escape(scan_format)}", f.name)
-    # if f.name.endswith(f".{scan_format}")
-    if f.suffix in (f".{scan_format}", f".{image_format}")
-]
+def main():
 
-files = remove_done_files(files, dst, dst_suffix=f".{image_format}")
+    files = [
+        f
+        for f in sorted(src.glob("*"))
+        # if re.fullmatch(rf"\d+\.{re.escape(scan_format)}", f.name)
+        # if f.name.endswith(f".{scan_format}")
+        if f.suffix in (f".{scan_format}", f".{image_format}")
+    ]
 
-if not files:
-    print("nothing to do")
-    sys.exit()
+    files = remove_done_files(files, dst, dst_suffix=f".{image_format}")
 
-tasks = [
-    (
-        str(f),
-        replace,
-        str(src),
-        str(dst),
-        str(tmp) if replace else None,
-        str(bak) if replace else None,
-        jpeg_quality,
-        color_pages,
+    if not files:
+        print("nothing to do")
+        sys.exit()
+
+    tasks = [
+        (
+            str(f),
+            replace,
+            str(src),
+            str(dst),
+            str(tmp) if replace else None,
+            str(bak) if replace else None,
+            jpeg_quality,
+            color_pages,
+        )
+        for f in files
+    ]
+
+    num_done = 0
+
+    tqdm_kwargs = dict(
+        total=len(tasks),
+        ncols=80,
+        unit="page",
     )
-    for f in files
-]
 
-num_done = 0
+    with (
+        ProcessPoolExecutor(max_workers=num_workers) as executor,
+        tqdm(**tqdm_kwargs) as pbar,
+    ):
+        for done, message in executor.map(process_image, tasks):
+            if message:
+                print()
+                print(message)
+            if done:
+                num_done += 1
+            pbar.update(1)
 
-tqdm_kwargs = dict(
-    total=len(tasks),
-    ncols=80,
-    unit="page",
-)
+    # -----------------------------------------------------------------------------
 
-with (
-    ProcessPoolExecutor(max_workers=num_workers) as executor,
-    tqdm(**tqdm_kwargs) as pbar,
-):
-    for done, message in executor.map(process_image, tasks):
-        if message:
-            print()
-            print(message)
-        if done:
-            num_done += 1
-        pbar.update(1)
+    if replace:
+        try:
+            tmp.rmdir()
+        except OSError:
+            pass
 
-# -----------------------------------------------------------------------------
+    if replace and num_done == 0:
+        try:
+            bak.rmdir()
+        except OSError:
+            pass
 
-if replace:
-    try:
-        tmp.rmdir()
-    except OSError:
-        pass
+    r'''
+    print(f"done. compressed {num_done} images")
+    '''
 
-if replace and num_done == 0:
-    try:
-        bak.rmdir()
-    except OSError:
-        pass
 
-r'''
-print(f"done. compressed {num_done} images")
-'''
+if __name__ == "__main__":
+    main()
