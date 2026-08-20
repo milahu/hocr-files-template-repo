@@ -89,6 +89,7 @@ todo_args = [
     "--doc-date", "2025",
     "--doc-edition", "1",
     "--doc-extent", "123 pages",
+    "--color-image-pages", "124,125",
     "--doc-author", "",
     # "--doc-introducer", "",
     # "--doc-contributor", "",
