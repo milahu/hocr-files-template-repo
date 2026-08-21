@@ -154,6 +154,9 @@ def main():
             shutil.copy(f, f_dst)
     # process only content files
     files = content_files
+    if not content_files:
+        print("no content files")
+        return
     images = files
 
     num_workers = psutil.cpu_count(logical=False) or 1
