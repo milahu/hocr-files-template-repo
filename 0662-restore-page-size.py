@@ -1104,6 +1104,18 @@ def main():
             # copy extra pages: book cover, etc
             extra_files.append(f)
 
+    # copy extra pages: book cover, etc
+    if extra_files:
+        print(f"copying {len(extra_files)} extra pages")
+        for f in extra_files:
+            f_dst = dst / f.name
+            shutil.copy(f, f_dst)
+    extra_files = []
+
+    if not content_files:
+        print("no content files")
+        return
+
     page_aspect = config.page_width_px / config.page_height_px
 
     process_content_files = []
@@ -1127,6 +1139,18 @@ def main():
                 continue
             page_heights.append(img.height)
             process_content_files.append(f)
+
+    # copy extra pages: book cover, etc
+    if extra_files:
+        print(f"copying {len(extra_files)} extra pages")
+        for f in extra_files:
+            f_dst = dst / f.name
+            shutil.copy(f, f_dst)
+    extra_files = []
+
+    if not process_content_files:
+        print("no content files")
+        return
 
     average_height = sum(page_heights) / len(page_heights)
 
@@ -1193,13 +1217,6 @@ def main():
             if done:
                 num_done += 1
             pbar.update(1)
-
-    # copy extra pages: book cover, etc
-    if extra_files:
-        print(f"copying {len(extra_files)} extra pages")
-        for f in extra_files:
-            f_dst = dst / f.name
-            shutil.copy(f, f_dst)
 
     # -----------------------------------------------------------------------------
 
