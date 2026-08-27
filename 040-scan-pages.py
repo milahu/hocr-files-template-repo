@@ -145,6 +145,9 @@ def main():
         f"in {int(t2 - t1)} seconds"
     )
 
+    if not added_files:
+        return
+
     added_files.sort()
 
     print("view added files:")
