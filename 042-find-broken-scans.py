@@ -27,6 +27,7 @@ from _shared import (
     load_config,
     get_page_num,
     get_image_viewer_argstr,
+    compress_paths,
 )
 
 config = load_config()
@@ -605,7 +606,7 @@ def print_runs(runs, filename_of_page):
     filenames.sort()
     parity_name = "odd" if is_odd_pages else "even"
     print(f"  view all {parity_name} pages:")
-    print(f"    {get_image_viewer_argstr(filenames, config)}")
+    print(f"    {get_image_viewer_argstr(filenames, config)};")
 
     for cluster_idx, run in enumerate(runs):
         filenames = sorted(set(map(str, run.filenames)))
@@ -637,7 +638,7 @@ def print_runs(runs, filename_of_page):
             ]))
             # print(f"580: filenames={filenames}")
             print("  view strong pages:")
-            print(f"    {get_image_viewer_argstr(filenames, config)}")
+            print(f"    {get_image_viewer_argstr(filenames, config)};")
 
         if 1:
             weak_pages = sorted({
@@ -656,7 +657,7 @@ def print_runs(runs, filename_of_page):
                     # print("  view weak artifacts pages:")
                     # print(f"Found weak artifacts:")
                     print("  view weak pages:")
-                    print(f"  {get_image_viewer_argstr(weak_filenames, config)}")
+                    print(f"  {get_image_viewer_argstr(weak_filenames, config)};")
 
         if 1:
             pages = sorted(set(run.pages))
@@ -671,7 +672,7 @@ def print_runs(runs, filename_of_page):
                 # print(f"590: neighbor_filenames={neighbor_filenames}")
                 if neighbor_filenames:
                     print("  view neighbor pages:")
-                    print(f"    {get_image_viewer_argstr(neighbor_filenames, config)}")
+                    print(f"    {get_image_viewer_argstr(neighbor_filenames, config)};")
 
 
 def prepare_review_dirs(runs, filename_of_page):
@@ -693,11 +694,13 @@ def prepare_review_dirs(runs, filename_of_page):
     REVIEW_DIR.mkdir(parents=True, exist_ok=True)
 
     for run_idx, run in enumerate(runs, start=1):
+
         run_dir = REVIEW_DIR / f"{parity_name}-pages.run-{run_idx:03d}"
-        run_dir.mkdir(parents=True, exist_ok=True)
 
         # Strong detections
+        # TODO rename to filepaths
         filenames = {
+            # TODO rename to d["filepath"]
             Path(d["filename"])
             for d in run.strong_detections
         }
@@ -720,12 +723,22 @@ def prepare_review_dirs(runs, filename_of_page):
             if filename is not None:
                 filenames.add(Path(filename))
 
+        moved_filepaths = []
+
+        run_dir_exists = False
+
         for filename in sorted(filenames):
 
             if not filename.exists():
                 continue
 
+            if not run_dir_exists:
+                run_dir.mkdir(parents=True, exist_ok=True)
+                run_dir_exists = True
+
             destination = run_dir / filename.name
+
+            moved_filepaths.append(destination)
 
             # # Copy source image into review directory.
             # shutil.copy2(filename, destination)
@@ -754,15 +767,20 @@ def prepare_review_dirs(runs, filename_of_page):
         }
 
         print(f"run {run_idx}: {json.dumps(data)}")
+
+        if not moved_filepaths:
+            # all files in this run were part of previous runs
+            continue
+
         print(f"  review images:")
-        print(f"    {config.image_viewer} {run_dir}")
+        print(f"    {get_image_viewer_argstr(moved_filepaths, config)};")
         print(f"  restore images:")
-        print(f"    mv {run_dir}/* {INPUT_DIR} && rmdir {run_dir} && rmdir {REVIEW_DIR}")
+        print(f"    mv -t {INPUT_DIR} {compress_paths(moved_filepaths)} && rmdir {run_dir} && rmdir {REVIEW_DIR};")
         # we assume the user knows how to remove images
         # we dont print the "remove images" command here
         # so the user cannot accidentally copy-paste the "remove images" command
         # print(f"  remove images:")
-        # print(f"    rm -rf {run_dir}")
+        # print(f"    rm -rf {run_dir};")
 
 
 def height_profile_score(run):
