@@ -721,6 +721,10 @@ def prepare_review_dirs(runs, filename_of_page):
                 filenames.add(Path(filename))
 
         for filename in sorted(filenames):
+
+            if not filename.exists():
+                continue
+
             destination = run_dir / filename.name
 
             # # Copy source image into review directory.
