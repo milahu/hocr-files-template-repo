@@ -136,7 +136,7 @@ def main():
         exit(0)
 
     if config.do_rotate == False and config.do_crop == False:
-        print("no rotate, no crop -> hardlinking all files from src to dst")
+        print(f"no rotate, no crop -> hardlinking all files from {src} to {dst}")
         for f_src in images:
             f_dst = dst / f_src.name
             if f_dst.exists():
