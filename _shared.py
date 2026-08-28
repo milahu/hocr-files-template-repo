@@ -37,16 +37,75 @@ def load_config(config_path=config_path):
 
     config.page_num_width = len(str(config.max_num_pages))
 
-    # book binding side = scanner top side
-    # TODO handle more cases?
-    config.use_three_edge_deskew = (
-        config.do_rotate
-        and config.rotate_odd == 270
-        and config.rotate_even == 90
-    )
+    assert config.scan_top_edge in ("inside", "top", "bottom"), f"config.scan_top_edge={config.scan_top_edge!r}"
 
-    config.scan_x = min(config.scan_x, config.max_scan_x)
-    config.scan_y = min(config.scan_y, config.max_scan_y)
+    # Scanner geometry:
+    # X is parallel to the scan top edge.
+    # Y is the feed direction.
+    # Keep these derived values separate from physical page size.
+    if config.scan_top_edge == "inside":
+        # common case: the physical inside edge is fed first into the scanner
+        config.scan_width_mm = config.page_height_mm
+        config.scan_height_mm = config.unbinded_page_width_mm
+        config.do_rotate = True
+        config.rotate_odd, config.rotate_even = 270, 90
+    else:
+        # rare case: the physical top or bottom edge is fed first into the scanner
+        config.scan_width_mm = config.unbinded_page_width_mm
+        config.scan_height_mm = config.page_height_mm
+        if config.scan_top_edge == "top":
+            # rare case: the physical top edge is fed first into the scanner
+            config.do_rotate = False
+            config.rotate_odd = config.rotate_even = 0
+        elif config.scan_top_edge == "bottom":
+            # rare case: the physical bottom edge is fed first into the scanner
+            config.do_rotate = True
+            config.rotate_odd = config.rotate_even = 180
+
+    # TODO verify: 040-scan-pages.py should try to add scan_margin
+    # to the scan left + right + bottom edges
+    # as permitted by config.max_scan_width_mm and config.max_scan_height_mm
+    # yes?
+    # config.margined_scan_width_mm
+    # config.margined_scan_height_mm
+
+    if config.scan_width_mm > config.max_scan_width_mm:
+        raise ValueError(
+            f"scan_top_edge requires a scan width of {config.scan_width_mm} mm,"
+            f" but the scanner supports only {config.max_scan_width_mm} mm"
+        )
+    if config.scan_height_mm > config.max_scan_height_mm:
+        raise ValueError(
+            f"scan_top_edge requires a scan height of {config.scan_height_mm} mm,"
+            f" but the scanner supports only {config.max_scan_height_mm} mm"
+        )
+
+    # TODO? remove in favor of config.edge_deskew_mode
+    config.use_three_edge_deskew = config.scan_top_edge == "inside"
+    # "outside edge is reliable" means:
+    # the physical outside edge can be detected reliably
+    # because the scanned image contains enough of the gray scanner background
+    # so there is enough visible contrast between the physical outside edge and the scanner background
+    config.outside_edge_is_reliable = (
+        # TODO verify:
+        # does "config.use_three_edge_deskew == True" always mean
+        # that we can reliably detect the physical outside edge?
+        config.use_three_edge_deskew
+        or (
+            config.max_scan_width_mm - config.unbinded_page_width_mm
+            >= config.outside_edge_detection_min_margin_mm
+        )
+    )
+    # config for 065-remove-page-borders.py
+    # NOTE this "edge deskew" is different from the "content deskew" in 070-deskew.py
+    if config.use_three_edge_deskew:
+        config.edge_deskew_mode = "three_edges"
+    elif config.outside_edge_is_reliable:
+        config.edge_deskew_mode = "two_edges"
+    elif config.scan_top_edge == "top":
+        config.edge_deskew_mode = "bottom_only"
+    else:
+        config.edge_deskew_mode = "top_only"
 
     # FIXME
     # scanimage: rounded value of br-x from 216 to 215.88
@@ -70,7 +129,7 @@ def load_config(config_path=config_path):
     '''
 
     def get_rotated_x_y(config, x, y):
-        if config.use_three_edge_deskew:
+        if config.do_rotate and config.rotate_odd in (90, 270):
             # rotate by 90 or 270 degrees
             x, y = y, x
         return x, y
@@ -80,15 +139,7 @@ def load_config(config_path=config_path):
     (
         config.rotated_scan_x,
         config.rotated_scan_y
-    ) = get_rotated_x_y(config, config.scan_x, config.scan_y)
-
-    (
-        config.page_width_mm,
-        config.page_height_mm
-    ) = (
-        config.rotated_scan_x,
-        config.rotated_scan_y
-    )
+    ) = get_rotated_x_y(config, config.scan_width_mm, config.scan_height_mm)
 
     def px_of_mm(mm, dpi):
         return mm * dpi / 25.4
@@ -105,19 +156,24 @@ def load_config(config_path=config_path):
 
     config.rotated_scan_aspect = config.rotated_scan_x / config.rotated_scan_y
 
-    config.margined_scan_x = min(
-        config.scan_x + config.scan_margin,
-        config.max_scan_x
+    config.margined_scan_width_mm = min(
+        config.scan_width_mm + config.scan_margin,
+        config.max_scan_width_mm
     )
-    config.margined_scan_y = min(
-        config.scan_y + config.scan_margin,
-        config.max_scan_y
+    config.margined_scan_height_mm = min(
+        config.scan_height_mm + config.scan_margin,
+        config.max_scan_height_mm
     )
 
+    # TODO remove?
     (
         config.rotated_margined_scan_x,
         config.rotated_margined_scan_y
-    ) = get_rotated_x_y(config, config.margined_scan_x, config.margined_scan_y)
+    ) = get_rotated_x_y(
+        config,
+        config.margined_scan_width_mm,
+        config.margined_scan_height_mm,
+    )
 
     # thresholds for color leveling should be symmetrical:
     # lowthresh + highthresh == 1

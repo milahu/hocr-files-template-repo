@@ -9,29 +9,33 @@ color_pages = []
 # default: infer image_pages from color_pages
 # image_pages = []
 
-# TODO rename all mm sizes to scan_x_mm etc
+# scanner limits
+max_scan_width_mm = 215.88
+max_scan_height_mm = 355.567
 
-max_scan_x, max_scan_y = 215.88, 355.567 # maximum
+# physical page size (before unbinding)
+page_width_mm = 226
+page_height_mm = 226
 
-# NOTE this should be the full page size in millimeters
-# full size = before the book binding was removed
-# this size is used
-# 1. in 040-scan-pages.py
-# 2. in 065-remove-page-borders.py to restore the original page size
-# scan_x, scan_y = 210, 297 # DIN A4
-scan_x, scan_y = 147, 231
-scan_x, scan_y = 156, 210
-scan_x, scan_y = 210, 156 # rotate 90
+# physical page width after unbinding
+# unbinding removes a small strip (about 5 mm width) from the inside edge
+unbinded_page_width_mm = 215
 
-# scan_x, scan_y = max_scan_x, max_scan_y # maximum
+# which physical page edge is fed first into the document scanner?
+# that edge becomes the scan top edge
+# possible value: "inside" or "top" or "bottom"
+# the value "outside" makes no sense
+# because the scanner removes a small part of the scan top edge
+# so that edge can no longer be used to detect the page rotation
+# so if possible, the user should try to feed the physical inside edge first into the scanner
+# Rotation and scanner-area dimensions are derived in _shared.load_config().
+# scan_top_edge = "inside"
+# scan_top_edge = "top"
+# scan_top_edge = "bottom"
+scan_top_edge = "top"
 
-# this is True for most book pages
-# in reading order, the page width is smaller than the page height
-# orientation_is_portrait = False
-orientation_is_portrait = True
-
-assert scan_x <= max_scan_x, f"scan_x is out of range: {scan_x} > {max_scan_x}"
-assert scan_y <= max_scan_y, f"scan_y is out of range: {scan_y} > {max_scan_y}"
+# Less clearance than this makes the outside edge unreliable for detection.
+outside_edge_detection_min_margin_mm = 2.0
 
 # add margin for 065-remove-page-borders.py
 scan_margin = 10
@@ -107,16 +111,6 @@ scan_mode = "24bit Color[Fast]"
 # "center aligned" is not working: scanimage failed with returncode -11
 # scan_source = "Automatic Document Feeder(center aligned,Duplex)"
 scan_source = "Automatic Document Feeder(left aligned,Duplex)"
-
-
-
-# Config for 060-rotate-crop.py
-
-# --- Rotation settings ---
-do_rotate = True
-# rotate_odd, rotate_even = 90, 270
-# book binding side = scanner top side
-rotate_odd, rotate_even = 270, 90
 
 
 

@@ -187,6 +187,15 @@ def intersect_line_with_vertical_boundary(line, x):
     return np.array([x, y], dtype=np.float32)
 
 
+def intersect_line_with_horizontal_boundary(line, y):
+    """Intersect a parametric line with the horizontal line ``y = constant``."""
+    vx, vy, x0, y0 = map(float, line)
+    if abs(vy) < 1e-12:
+        raise ValueError("Line is parallel to horizontal boundary")
+    t = (y - y0) / vy
+    return np.array([x0 + t * vx, y], dtype=np.float32)
+
+
 def build_affine_without_shear(pt_v_top, pt_v_bot, expected_w, expected_h, bad_on_left, img, dbgdir=None):
     """
     Build a source triangle that enforces orthogonal page axes (no shear) using:
@@ -866,6 +875,93 @@ def paint_white_edge_border(
         raise ValueError(f"Invalid edge: {edge}")
 
 
+def deskew_bottom_only(img, bottom_pts):
+    """Deskew a top-edge-first scan using its single reliable bottom edge.
+
+    The page fills the scanner width, so its outside edge is intentionally not
+    fitted.  The leading image boundary is retained because the physical top
+    was consumed by the scanner; everything below the fitted bottom boundary
+    is scanner background and is removed.
+    """
+    H_img, W_img = img.shape[:2]
+    bottom_line = fit_line_ransac(bottom_pts)[:4]
+    rotation_error = horizontal_line_angle(bottom_line)
+    Mrot = cv2.getRotationMatrix2D(
+        (W_img / 2, H_img / 2), rotation_error, 1.0
+    )
+    rotated = cv2.warpAffine(
+        img,
+        Mrot,
+        (W_img, H_img),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(128, 128, 128),
+    )
+    rotated_bottom_line = fit_line_ransac(
+        transform_points_affine(bottom_pts, Mrot)
+    )[:4]
+    bottom_y = np.median([
+        intersect_line_with_vertical_boundary(rotated_bottom_line, 0.0)[1],
+        intersect_line_with_vertical_boundary(
+            rotated_bottom_line, float(W_img - 1)
+        )[1],
+    ])
+    crop_height = int(math.floor(bottom_y)) + 1
+    if crop_height < 2:
+        raise ValueError(f"Invalid bottom-edge position: {bottom_y}")
+    return rotated[:min(crop_height, H_img), :]
+
+
+def deskew_two_edges(img, bottom_pts, outside_pts, bad_on_left):
+    """Deskew an unrotated scan from its reliable bottom and outside edges."""
+    H_img, W_img = img.shape[:2]
+    bottom_line = fit_line_ransac(bottom_pts)[:4]
+    outside_line = fit_line_ransac(outside_pts)[:4]
+    rotation_error = np.mean([
+        horizontal_line_angle(bottom_line),
+        vertical_line_angle(outside_line) - 90,
+    ])
+    Mrot = cv2.getRotationMatrix2D(
+        (W_img / 2, H_img / 2), rotation_error, 1.0
+    )
+    rotated = cv2.warpAffine(
+        img, Mrot, (W_img, H_img),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(128, 128, 128),
+    )
+    bottom_line = fit_line_ransac(
+        transform_points_affine(bottom_pts, Mrot)
+    )[:4]
+    outside_line = fit_line_ransac(
+        transform_points_affine(outside_pts, Mrot)
+    )[:4]
+    bottom_y = np.median([
+        intersect_line_with_vertical_boundary(bottom_line, 0.0)[1],
+        intersect_line_with_vertical_boundary(bottom_line, float(W_img - 1))[1],
+    ])
+    crop_height = int(math.floor(bottom_y)) + 1
+    outside_x = intersect_line_with_horizontal_boundary(
+        outside_line, bottom_y
+    )[0]
+    page_width = int(round(px_of_mm(
+        config.unbinded_page_width_mm, config.scan_resolution
+    )))
+    if bad_on_left:
+        x1 = int(round(outside_x)) + 1
+        x0 = x1 - page_width
+    else:
+        x0 = int(round(outside_x))
+        x1 = x0 + page_width
+    x0 = max(0, x0)
+    x1 = min(W_img, x1)
+    if crop_height < 2 or x1 - x0 < 2:
+        raise ValueError(
+            f"Invalid two-edge crop: x=({x0}, {x1}), y={crop_height}"
+        )
+    return rotated[:min(crop_height, H_img), x0:x1]
+
+
 def process_image(in_path, out_path):
     """
     Robust page extraction that handles missing top (or bottom) edges.
@@ -1047,7 +1143,28 @@ def process_image(in_path, out_path):
     bottom_pts = reject_outliers_horizontal(bottom_pts)
     outside_pts = reject_outliers_vertical(outside_pts)
 
+    # Select the geometry before fitting: in bottom-only mode there is no
+    # usable top or outside line, so fitting either one is an error.
+    if config.edge_deskew_mode == "bottom_only":
+        warped = deskew_bottom_only(img, bottom_pts)
+    elif config.edge_deskew_mode == "two_edges":
+        warped = deskew_two_edges(
+            img, bottom_pts, outside_pts, bad_on_left
+        )
+    else:
+        warped = None
 
+    if warped is not None:
+        for edge in ("top", "bottom", "left", "right"):
+            if edge_is_white(warped, edge):
+                paint_white_edge_border(warped, edge, WHITE_BORDER_WIDTH)
+        if input_is_grayscale:
+            warped = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+        ensure_dir(out_path.parent)
+        save_image(out_path, warped)
+        return
+    if config.edge_deskew_mode == "top_only":
+        raise NotImplementedError("top-only deskew is not implemented yet")
 
     # 5. fit lines
 
