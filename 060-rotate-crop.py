@@ -135,18 +135,6 @@ def main():
         print("No input files found.")
         exit(0)
 
-    if config.do_rotate == False and config.do_crop == False:
-        print(f"no rotate, no crop -> hardlinking all files from {src} to {dst}")
-        for f_src in images:
-            f_dst = dst / f_src.name
-            if f_dst.exists():
-                # FIXME compare f_src and f_dst
-                # if f_src and f_dst are not identical
-                # then replace f_dst with f_src
-                continue
-            os.link(f_src, f_dst)
-        sys.exit()
-
     images = remove_done_files(images, dst)
 
     if 0:
