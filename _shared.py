@@ -140,6 +140,15 @@ def load_config(config_path=config_path):
     # TODO validate config
     # if orientation_is_portrait and (scan_x < scan_y) and do_rotate:
 
+    if getattr(config, "deskew_white_lightness_threshold", None) != None:
+        assert 0 <= config.deskew_white_lightness_threshold <= 1
+
+    if getattr(config, "deskew_black_lightness_threshold", None) != None:
+        assert 0 <= config.deskew_black_lightness_threshold <= 1
+
+    if getattr(config, "deskew_dark_lightness_threshold", None) != None:
+        assert 0 <= config.deskew_dark_lightness_threshold <= 1
+
     return config
 
 

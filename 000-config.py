@@ -166,6 +166,24 @@ image_viewer = "feh"
 
 
 
+# config for 070-deskew.py
+
+# Threshold to consider a page "white" (mean lightness close to 1)
+# deskew_white_lightness_threshold = 99.99 / 100 # 99.99%
+deskew_white_lightness_threshold = 99.95 / 100 # 99.95%
+# deskew_white_lightness_threshold = 99.90 / 100 # 99.90%
+
+# Threshold to consider a page "black" (mean lightness close to 0)
+# black page with little white text can have 0.49 to 0.84
+# black page with no text can have 0 to 0.68
+deskew_black_lightness_threshold = 0.05 / 100 # 0.05%
+
+# Threshold to consider a page "dark" (black page with white text)
+# white page with lots of black text can have 0.80
+deskew_dark_lightness_threshold = 25 / 100 # 25%
+
+
+
 # config for 090-ocr.py
 
 ocr_lang = "deu+eng" # german + english
