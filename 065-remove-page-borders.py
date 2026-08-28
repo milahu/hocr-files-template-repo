@@ -51,6 +51,14 @@ WHITE_TEST_OUTER = 20
 WHITE_FRACTION_THRESHOLD = 0.99
 PRACTICALLY_WHITE_THRESHOLD = 250  # for uint8 images
 
+# Gray scanner-background wedges introduced by a small rotation.  They must
+# begin at an image edge; gray page artwork farther inside is left untouched.
+TRIANGLE_GRAY_MIN = 70
+TRIANGLE_GRAY_MAX = 180
+TRIANGLE_MAX_DEPTH = 600
+TRIANGLE_MIN_COVERAGE = 0.60
+TRIANGLE_MIN_DEPTH = 1
+
 
 
 import os
@@ -875,6 +883,83 @@ def paint_white_edge_border(
         raise ValueError(f"Invalid edge: {edge}")
 
 
+def _edge_gray_run_depths(gray, edge, max_depth=TRIANGLE_MAX_DEPTH):
+    """Return consecutive scanner-gray depth from an image edge per row/col."""
+    h, w = gray.shape
+    if edge == "left":
+        strip = gray[:, :min(max_depth, w)]
+    elif edge == "right":
+        strip = gray[:, max(0, w - max_depth):][:, ::-1]
+    elif edge == "top":
+        strip = gray[:min(max_depth, h), :].T
+    elif edge == "bottom":
+        strip = gray[max(0, h - max_depth):, :][::-1, :].T
+    else:
+        raise ValueError(f"Invalid edge: {edge}")
+
+    scanner_gray = (strip >= TRIANGLE_GRAY_MIN) & (strip <= TRIANGLE_GRAY_MAX)
+    first_non_gray = np.argmax(~scanner_gray, axis=1)
+    all_gray = scanner_gray.all(axis=1)
+    first_non_gray[all_gray] = scanner_gray.shape[1]
+    return first_non_gray
+
+
+def _crop_edge(image, edge, amount):
+    if amount <= 0:
+        return image
+    if edge == "top":
+        return image[amount:, :, :]
+    if edge == "bottom":
+        return image[:-amount, :, :]
+    if edge == "left":
+        return image[:, amount:, :]
+    if edge == "right":
+        return image[:, :-amount, :]
+    raise ValueError(f"Invalid edge: {edge}")
+
+
+def remove_gray_edge_triangles(image, bad_on_left):
+    """Remove rotation wedges while preserving as much page size as possible.
+
+    Top and outside use the requested hybrid treatment: crop the outer half
+    of the wedge, then overpaint its remaining inner half white.  The inside
+    edge is fully cropped; 0662 restores that intentionally sacrificed width.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    inside_edge = "left" if bad_on_left else "right"
+    outside_edge = "right" if bad_on_left else "left"
+
+    for edge, is_inside in (("top", False), (outside_edge, False), (inside_edge, True)):
+        depths = _edge_gray_run_depths(gray, edge)
+        nonzero = depths[depths >= TRIANGLE_MIN_DEPTH]
+        if len(nonzero) < max(1, int(len(depths) * TRIANGLE_MIN_COVERAGE)):
+            continue
+
+        # A hand-retouched triangle can begin partway along an edge and taper
+        # down to a one-pixel gray line.  Broad coverage identifies it as a
+        # scanner border; the 99th percentile keeps one unusual row/column
+        # from turning a small wedge into a large crop.
+        depth = int(math.ceil(np.percentile(nonzero, 99)))
+        if is_inside:
+            crop_amount = depth
+            fill_amount = 0
+        else:
+            crop_amount = int(math.ceil(depth / 2.0))
+            fill_amount = depth - crop_amount
+
+        image = _crop_edge(image, edge, crop_amount)
+        if fill_amount:
+            paint_white_edge_border(image, edge, fill_amount)
+        if DEBUG:
+            print(
+                f"gray triangle {edge}: depth={depth}, "
+                f"crop={crop_amount}, fill_white={fill_amount}"
+            )
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    return image
+
+
 def deskew_bottom_only(img, bottom_pts):
     """Deskew a top-edge-first scan using its single reliable bottom edge.
 
@@ -1155,6 +1240,7 @@ def process_image(in_path, out_path):
         warped = None
 
     if warped is not None:
+        warped = remove_gray_edge_triangles(warped, bad_on_left)
         for edge in ("top", "bottom", "left", "right"):
             if edge_is_white(warped, edge):
                 paint_white_edge_border(warped, edge, WHITE_BORDER_WIDTH)
@@ -1807,6 +1893,8 @@ def process_image(in_path, out_path):
 
                 if DEBUG:
                     print(f"white edge cleanup: {edge}: white margin -> PAINT {WHITE_BORDER_WIDTH}px")
+
+        warped = remove_gray_edge_triangles(warped, bad_on_left)
 
 
 
