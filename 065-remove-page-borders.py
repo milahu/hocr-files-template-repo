@@ -13,7 +13,7 @@ OUTPUT_DIR = "065-remove-page-borders"
 # === Tuning parameters ===
 DEBUG = True
 DEBUG = False
-BORDER_SIZE = 0  # pixels
+BORDER_SIZE = 20  # pixels
 
 RANSAC_ITER = 400
 RANSAC_INLIER_DIST = 6.0
