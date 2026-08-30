@@ -14,12 +14,12 @@ max_scan_width_mm = 215.88
 max_scan_height_mm = 355.567
 
 # physical page size (before unbinding)
-page_width_mm = 226
-page_height_mm = 226
+page_width_mm = 124
+page_height_mm = 190
 
 # physical page width after unbinding
 # unbinding removes a small strip (about 5 mm width) from the inside edge
-unbinded_page_width_mm = 215
+unbinded_page_width_mm = 121
 
 # which physical page edge is fed first into the document scanner?
 # that edge becomes the scan top edge
@@ -32,7 +32,7 @@ unbinded_page_width_mm = 215
 # scan_top_edge = "inside"
 # scan_top_edge = "top"
 # scan_top_edge = "bottom"
-scan_top_edge = "top"
+scan_top_edge = "inside"
 
 # Less clearance than this makes the outside edge unreliable for detection.
 outside_edge_detection_min_margin_mm = 2.0
@@ -151,7 +151,7 @@ lowthresh = 0.3
 
 # leveling is too destructive on images and colors
 # so we keep the darkgray text on lightgray background
-do_level = False
+# do_level = False
 
 
 
