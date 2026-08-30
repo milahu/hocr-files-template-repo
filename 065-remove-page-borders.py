@@ -27,18 +27,24 @@ import os
 import re
 import math
 import random
+from pathlib import Path
+
 import numpy as np
 import cv2
 
 from _shared import (
     load_config,
     get_page_num,
+    remove_done_files,
 )
 
 config = load_config()
 
-scan_x = config.scan_x
-scan_y = config.scan_y
+def px_of_mm(mm):
+    return mm * config.scan_resolution / 25.4
+
+scan_x = px_of_mm(config.scan_width_mm)
+scan_y = px_of_mm(config.scan_height_mm)
 
 config.scan_aspect = scan_x / scan_y
 
@@ -490,13 +496,15 @@ def process_image(in_path, out_path):
 
 def main():
     ensure_dir(OUTPUT_DIR)
-    # TODO use image_format from 030-measure-page-size.txt
-    image_format = "jpg"
-    files = sorted([f for f in os.listdir(INPUT_DIR) if f.endswith(f".{image_format}")])
+    image_format = config.scan_format
+    # files = sorted([f for f in os.listdir(INPUT_DIR) if f.endswith(f".{image_format}")])
+    files = sorted(Path(INPUT_DIR).glob(f"*.{image_format}"))
+    files = remove_done_files(files, OUTPUT_DIR)
     if not files:
-        print("No image files found in", INPUT_DIR)
+        print("nothing to do")
         return
-    for fname in files:
+    for in_path in files:
+        fname = in_path.name
         m = re.match(r"^(\d+)", fname)
         # page_num = int(m.group(1)) if m else 0
         page_num = int(m.group(1)) # can throw
@@ -504,7 +512,7 @@ def main():
         # if not page_num in [340, 345]: continue # debug
         # if page_num < 300: continue # debug
         # if page_num != 320: continue # debug
-        in_path = os.path.join(INPUT_DIR, fname)
+        # in_path = os.path.join(INPUT_DIR, fname)
         out_path = os.path.join(OUTPUT_DIR, fname)
         if os.path.exists(out_path):
             continue
