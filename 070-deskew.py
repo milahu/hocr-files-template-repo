@@ -27,7 +27,6 @@ from _shared import (
 # src = "067-force-lightmode"
 src = "0663-level"
 dst = os.path.splitext(os.path.basename(__file__))[0]
-lightness_txt_path = Path("0683-lightness.txt")
 os.makedirs(dst, exist_ok=True)
 
 src = Path(src)
@@ -90,6 +89,7 @@ def main():
         print(f"config.deskew_dark_lightness_threshold={config.deskew_dark_lightness_threshold}")
 
     # load lightness file
+    lightness_txt_path = Path(config.deskew_lightness_file)
     page_lightness = {}
     image_files = []
     with lightness_txt_path.open() as f:

@@ -172,6 +172,8 @@ fill_white_pages_white_lightness_threshold = 99.99 / 100 # 99.99%
 
 # config for 070-deskew.py
 
+deskew_lightness_file = "0683-lightness.txt"
+
 # Threshold to consider a page "white" (mean lightness close to 1)
 # deskew_white_lightness_threshold = 99.99 / 100 # 99.99%
 deskew_white_lightness_threshold = 99.95 / 100 # 99.95%
