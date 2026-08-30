@@ -6,7 +6,7 @@
 # - after 065-remove-page-borders.py
 #
 # destructive book scanning can remove part of the original inner page edge:
-# - the book is unbound with a guillotine cutter
+# - the book is unbinded with a guillotine cutter
 # - the loose pages are scanned with a document scanner
 #
 # config.page_width_px and config.page_height_px define the original page aspect ratio.
@@ -957,6 +957,71 @@ def restore_width(
 
 
 # -----------------------------------------------------------------------------
+# Scanner aspect-ratio correction
+# -----------------------------------------------------------------------------
+
+def correct_scanner_aspect_ratio(img):
+    """
+    Correct scanner-induced aspect-ratio distortion.
+
+    The document scanner's scan-axis dimension may be geometrically inaccurate.
+
+    When config.do_rotate is True:
+        The physical page was scanned rotated and subsequently rotated back.
+        Therefore the scanner's Y-axis error appears as an error in image width.
+        Height is assumed correct; width is corrected.
+
+    When config.do_rotate is False:
+        Width is assumed correct; height is corrected.
+
+    The corrected image has the expected aspect ratio of the unbinded page:
+
+        config.unbinded_page_width_mm / config.page_height_mm
+    """
+
+    width, height = img.size
+
+    target_aspect = (
+        config.unbinded_page_width_mm
+        / config.page_height_mm
+    )
+
+    if config.do_rotate:
+
+        # Height is correct.
+        target_width = round(
+            height * target_aspect
+        )
+
+        if target_width == width:
+            return img
+
+        return img.resize(
+            (
+                target_width,
+                height,
+            ),
+            resample=Image.Resampling.LANCZOS,
+        )
+
+    # Width is correct.
+    target_height = round(
+        width / target_aspect
+    )
+
+    if target_height == height:
+        return img
+
+    return img.resize(
+        (
+            width,
+            target_height,
+        ),
+        resample=Image.Resampling.LANCZOS,
+    )
+
+
+# -----------------------------------------------------------------------------
 # Process one image
 # -----------------------------------------------------------------------------
 
@@ -1002,6 +1067,12 @@ def process_image(args):
             img = remove_alpha_on_white(
                 img,
             )
+
+        # ---------------------------------------------------------------------
+        # Correct scanner aspect-ratio distortion
+        # ---------------------------------------------------------------------
+
+        img = correct_scanner_aspect_ratio(img)
 
         # ---------------------------------------------------------------------
         # Normalize height
@@ -1120,24 +1191,88 @@ def main():
 
     process_content_files = []
 
+    if 0:
+        # debug: process only the first page
+        content_files = content_files[:1]
+
+    original_width_mm = config.page_width_mm
+    original_height_mm = config.page_height_mm
+    unbinded_width_mm = config.unbinded_page_width_mm
+
+    original_aspect = original_width_mm / original_height_mm
+    unbinded_aspect = unbinded_width_mm / original_height_mm
+
+    if 0:
+        # debug
+        print()
+        print("page aspect-ratio diagnostics")
+        print(f"  original page: {original_width_mm:.2f} x {original_height_mm:.2f} mm")
+        print(f"  unbinded page: {unbinded_width_mm:.2f} x {original_height_mm:.2f} mm")
+        print(f"  target unbinded aspect ratio: {unbinded_aspect:.8f}")
+        print(f"  scanner rotation correction: {config.do_rotate}")
+        print()
+
+    # TODO move this to a function: get_page_heights
     for f in tqdm(
         content_files,
         ncols=80,
         unit="page",
     ):
         with Image.open(f) as img:
+
+            original_scan_width = img.width
+            original_scan_height = img.height
+
             img_aspect = img.width / img.height
-            # see also:
-            # if width > target_width:
-            if img_aspect > page_aspect:
-                # usually this happens with the "back-and-spine.tiff" page
-                # with the spine causing the extra width
-                print("\n" + f"error: image has too much width: f={f} img_aspect={img_aspect} page_aspect={page_aspect}")
-                # copy extra pages: book cover, etc
+
+            # -------------------------------------------------------------
+            # Correct scanner-induced aspect-ratio distortion.
+            # -------------------------------------------------------------
+
+            if config.do_rotate:
+                # Height is the good dimension.
+                corrected_width = round(img.height * unbinded_aspect)
+                corrected_height = img.height
+            else:
+                # Width is the good dimension.
+                corrected_width = img.width
+                corrected_height = round(img.width / unbinded_aspect)
+
+            corrected_aspect = corrected_width / corrected_height
+
+            if 0:
+                # debug
+                print()
+                print(f"{f.name}")
+                print(f"  scanner image: {original_scan_width} x {original_scan_height} px")
+                print(f"  scanner aspect ratio: {img_aspect:.8f}")
+                print(f"  corrected image: {corrected_width} x {corrected_height} px")
+                print(f"  corrected aspect ratio: {corrected_aspect:.8f}")
+                if config.do_rotate:
+                    print(
+                        f"  width correction: {original_scan_width} -> {corrected_width} px "
+                        f"({(corrected_width / original_scan_width - 1) * 100:+.3f}%)"
+                    )
+                else:
+                    print(
+                        f"  height correction: {original_scan_height} -> {corrected_height} px "
+                        f"({(corrected_height / original_scan_height - 1) * 100:+.3f}%)"
+                    )
+
+            # -------------------------------------------------------------
+            # sanity check
+            # -------------------------------------------------------------
+
+            if img_aspect > unbinded_aspect:
+                print()
+                print(f"WARNING: image is wider than expected unbinded page aspect ratio: {f.name}")
                 extra_files.append(f)
-                # ignore this img.height
                 continue
-            page_heights.append(img.height)
+
+            # IMPORTANT:
+            # We want the height AFTER scanner aspect-ratio correction.
+            page_heights.append(corrected_height)
+
             process_content_files.append(f)
 
     # copy extra pages: book cover, etc
