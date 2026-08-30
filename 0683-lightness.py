@@ -17,6 +17,7 @@ from tqdm import tqdm
 # input directory
 src = "065-remove-page-borders"
 # src = "067-force-lightmode"
+src = "0663-level"
 
 # output file
 dst = os.path.splitext(os.path.basename(__file__))[0] + ".txt"
