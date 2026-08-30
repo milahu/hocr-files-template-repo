@@ -11,22 +11,11 @@ import importlib.util
 
 from PIL import Image
 
-config_path = Path("0684-fill-white-pages-config.py")
+from _shared import (
+    load_config,
+)
 
-
-if 0:
-    # set config here
-    class FillWhitePagesConfig:
-        # Threshold to consider a page "white" (mean lightness close to 100)
-        WHITE_LIGHTNESS_THRESHOLD = 99.9
-    config = FillWhitePagesConfig()
-    image_dir = "065-remove-page-borders"
-    lightness_file = "0683-lightness.txt"
-else:
-    # load config from config_path
-    spec = importlib.util.spec_from_file_location("fill_white_pages_config", config_path)
-    config = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(config)
+src = "0663-level"
 
 
 def random_temp_path(path: Path) -> Path:
@@ -57,9 +46,11 @@ def fill_white(image_path: Path):
 
 def main():
 
-    lightness_file = Path(config.lightness_file)
+    config = load_config()
 
-    image_dir = Path(config.image_dir)
+    lightness_file = Path(config.fill_white_pages_lightness_file)
+
+    image_dir = Path(src)
 
     if not lightness_file.is_file():
         sys.exit(f"Error: Lightness file not found: {lightness_file}")
@@ -78,11 +69,12 @@ def main():
             try:
                 lightness_str, filename = line.split(" ", 1)
                 lightness = float(lightness_str)
+                lightness = lightness / 100 # convert from percent value
             except ValueError:
                 print(f"Skipping malformed line {lineno}: {line}", file=sys.stderr)
                 continue
 
-            if lightness < config.WHITE_LIGHTNESS_THRESHOLD:
+            if lightness < config.fill_white_pages_white_lightness_threshold:
                 # keep file
                 continue
 
