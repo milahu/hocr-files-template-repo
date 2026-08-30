@@ -13,7 +13,8 @@ config = load_config()
 txt_file = Path("0683-lightness.txt")
 
 # Directory containing the images
-image_dir = Path("065-remove-page-borders")
+src = Path("065-remove-page-borders")
+src = Path("0663-level")
 
 # Read filenames from the second column
 image_files = []
@@ -23,7 +24,7 @@ with txt_file.open("r", encoding="utf-8") as f:
         parts = line.split()
         if len(parts) >= 2:
             filename = parts[1]
-            image_files.append(image_dir / filename)
+            image_files.append(src / filename)
 
 # Open all images
 subprocess.run([config.image_viewer, *map(str, image_files)])
