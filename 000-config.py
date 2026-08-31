@@ -19,7 +19,7 @@ page_height_mm = 190
 
 # physical page width after unbinding
 # unbinding removes a small strip (about 5 mm width) from the inside edge
-unbinded_page_width_mm = 121
+unbinded_page_width_mm = page_width_mm - 5 # 5 mm width was removed
 
 # which physical page edge is fed first into the document scanner?
 # that edge becomes the scan top edge
