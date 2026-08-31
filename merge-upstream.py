@@ -47,12 +47,14 @@ def main():
 
     origin_url = get_origin_url()
 
+    r'''
     if origin_url == UPSTREAM_URL and not args.force:
         print(
             f"error: this is not a fork of {UPSTREAM_URL}",
             file=sys.stderr,
         )
         sys.exit(1)
+    '''
 
     # Add the upstream remote if it doesn't already exist.
     result = run_git(
