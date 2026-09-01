@@ -106,7 +106,7 @@ image_format = "jpg"
 
 # scan_mode = "24bit Color[Fast]"
 scan_mode = "True Gray"
-scan_mode = "24bit Color[Fast]"
+# scan_mode = "24bit Color[Fast]"
 
 # "center aligned" is not working: scanimage failed with returncode -11
 # scan_source = "Automatic Document Feeder(center aligned,Duplex)"
