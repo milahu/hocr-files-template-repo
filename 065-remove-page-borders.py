@@ -28,9 +28,12 @@ import re
 import math
 import random
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 import cv2
+import psutil
+from tqdm import tqdm
 
 from _shared import (
     load_config,
@@ -491,7 +494,17 @@ def process_image(in_path, out_path):
 
     ensure_dir(os.path.dirname(out_path))
     cv2.imwrite(out_path, canvas)
-    print(f"writing {out_path}")
+    # print(f"writing {out_path}")
+
+
+def process_file(in_path):
+    fname = Path(in_path).name
+    # page_num = get_page_num(in_path)
+
+    # in_path = os.path.join(INPUT_DIR, fname)
+    out_path = os.path.join(OUTPUT_DIR, fname)
+
+    process_image(in_path, out_path)
 
 
 def main():
@@ -503,24 +516,39 @@ def main():
     if not files:
         print("nothing to do")
         return
-    for in_path in files:
-        fname = in_path.name
-        m = re.match(r"^(\d+)", fname)
-        # page_num = int(m.group(1)) if m else 0
-        page_num = int(m.group(1)) # can throw
-        # if page_num != 14: continue # debug
-        # if not page_num in [340, 345]: continue # debug
-        # if page_num < 300: continue # debug
-        # if page_num != 320: continue # debug
-        # in_path = os.path.join(INPUT_DIR, fname)
-        out_path = os.path.join(OUTPUT_DIR, fname)
-        if os.path.exists(out_path):
-            continue
-        try:
-            process_image(in_path, out_path)
-        except Exception as exc:
-            print(f"Error processing {fname}: {exc}")
-            raise
+
+    num_workers = psutil.cpu_count(logical=False) or 1
+
+    # by default, OpenCV uses multiple CPU threads
+    cv2.setNumThreads(1)
+
+    if 0:
+        # debug: disable parallel processing
+        num_workers = 1
+
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = {
+            executor.submit(process_file, in_path): in_path
+            for in_path in files
+        }
+
+        tqdm_kwargs = dict(
+            total=len(files),
+            ncols=80,
+            unit="page",
+        )
+
+        with tqdm(**tqdm_kwargs) as pbar:
+            for future in as_completed(futures):
+                in_path = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    print(f"Error processing {in_path}: {exc}")
+                    raise
+                finally:
+                    pbar.update(1)
+
 
 if __name__ == "__main__":
     main()
