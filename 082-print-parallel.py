@@ -2340,7 +2340,7 @@ def main():
             )
 
             print(
-                " ".join(command)
+                shlex.join(command)
             )
 
             subprocess.run(
