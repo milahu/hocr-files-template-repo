@@ -22,6 +22,7 @@ from _shared import (
 # src = "0685-fill-white-pages"
 src = "0663-level"
 src = "070-deskew"
+src = "072-deskew-fix-page-size"
 
 # destination directory
 dst = Path(Path(__file__).stem)

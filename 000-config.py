@@ -190,6 +190,15 @@ deskew_dark_lightness_threshold = 25 / 100 # 25%
 
 
 
+# config for 072-deskew-fix-page-size.py
+
+# expand the image size of small pages
+deskew_fix_page_size_keep_small_pages = False
+# keep the image size of small pages
+# deskew_fix_page_size_keep_small_pages = True
+
+
+
 # config for 090-ocr.py
 
 ocr_lang = "deu+eng" # german + english

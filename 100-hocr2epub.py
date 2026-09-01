@@ -98,7 +98,7 @@ todo_args = [
     "--doc-language", "de", # german
     # "--doc-language", "en", # english
     "--doc-isbn", "0000000000000",
-    "--doc-cover-image", "070-deskew/999.tiff",
+    "--doc-cover-image", "072-deskew-fix-page-size/999.tiff",
     "--canonical-url-base", "https://milahu.github.io/todo/",
     "--doc-description", """
 """,

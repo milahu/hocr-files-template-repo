@@ -193,6 +193,9 @@ def load_config(config_path=config_path):
         # infer image_pages from color_pages
         config.image_pages = config.color_pages
 
+    if not hasattr(config, "deskew_fix_page_size_keep_small_pages"):
+        config.deskew_fix_page_size_keep_small_pages = False
+
     # TODO validate config
     # if orientation_is_portrait and (scan_x < scan_y) and do_rotate:
 
