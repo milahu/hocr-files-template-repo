@@ -574,6 +574,97 @@ def resolve_pdf_page_number(
     return page_index
 
 
+def normalize_pdf_for_printing(
+        input_pdf,
+        output_pdf,
+    ):
+    """
+    Normalize PDF pages for printing.
+
+    Landscape pages are rotated into portrait orientation.
+
+    This handles both:
+        - pages with an explicit PDF rotation
+        - pages whose actual page geometry is landscape
+
+    The page contents are preserved using show_pdf_page().
+    """
+
+    source = pymupdf.open(input_pdf)
+    output = pymupdf.open()
+
+    did_change = False
+
+    for index, source_page in enumerate(source):
+
+        rect = source_page.rect
+
+        # A page is considered landscape when its effective
+        # displayed width is greater than its height.
+        landscape = (
+            rect.width > rect.height
+        )
+
+        if not landscape:
+            # Normal portrait page: copy unchanged.
+            output.insert_pdf(
+                source,
+                from_page=index,
+                to_page=index,
+            )
+            continue
+
+        did_change = True
+
+        print(
+            f"normalizing landscape page "
+            f"{index + 1}: "
+            f"{rect.width:.2f} x "
+            f"{rect.height:.2f}"
+        )
+
+        # ----------------------------------------------------------
+        # Create a portrait page with width/height exchanged.
+        # ----------------------------------------------------------
+
+        portrait_width = rect.height
+        portrait_height = rect.width
+
+        destination_page = output.new_page(
+            width=portrait_width,
+            height=portrait_height,
+        )
+
+        destination_rect = pymupdf.Rect(
+            0,
+            0,
+            portrait_width,
+            portrait_height,
+        )
+
+        # show_pdf_page() can rotate the source page while
+        # placing it into the destination rectangle.
+        destination_page.show_pdf_page(
+            destination_rect,
+            source,
+            index,
+            rotate=90,
+            keep_proportion=True,
+        )
+
+    if not did_change:
+        output.close()
+        source.close()
+        return None
+
+    output.save(output_pdf)
+
+    output.close()
+    source.close()
+
+    return output_pdf
+
+
 def create_filtered_pdf(
     input_pdf,
     page_sequence,
@@ -676,6 +767,19 @@ def create_filtered_pdf(
             f"logical zero pages inserted: "
             f"{zero_count}"
         )
+
+    # --------------------------------------------------------------
+    # Normalize PDF rotation for printing
+    # --------------------------------------------------------------
+
+    normalized_pdf = f"{input_pdf}.normalized.pdf"
+
+    normalized_pdf = normalize_pdf_for_printing(input_pdf, normalized_pdf)
+
+    if normalized_pdf:
+        print(f"done normalized_pdf: {normalized_pdf}")
+        input_pdf = normalized_pdf
+        source = pymupdf.open(input_pdf)
 
     # --------------------------------------------------------------
     # Create logical output PDF.
