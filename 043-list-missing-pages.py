@@ -12,7 +12,20 @@ src = Path("040-scan-pages")
 
 
 def main():
+    global src
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "src",
+        nargs="?",
+        type=Path,
+        default=src,
+        help=f"source directory (default: {src})",
+    )
+    args = parser.parse_args()
+
     config = load_config()
+    src = args.src
 
     if not src.is_dir():
         parser.error(f"not a directory: {src}")
