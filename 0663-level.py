@@ -159,6 +159,13 @@ def main():
         return
     images = files
 
+    if 1:
+        # debug: print config
+        print(f"leveling colors:")
+        print(f"  levels for text pages: low={config.text_lowthresh} high={config.text_highthresh}")
+        print(f"  levels for image pages: low={config.images_lowthresh} high={config.images_highthresh}")
+        print(f"  image pages: {config.image_pages}")
+
     num_workers = psutil.cpu_count(logical=False) or 1
     print(f"Using {num_workers} workers...")
 
