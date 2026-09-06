@@ -19,6 +19,7 @@
 # do not use these compressed scans
 # but they use the uncompressed scans (usually TIFF images)
 
+import argparse
 import os
 import re
 import shutil
@@ -52,7 +53,7 @@ datetime_str = (
 )
 
 src = Path("060-rotate-crop")
-dst = Path(Path(__file__).stem)
+dst = Path(f"{src}-compressed")
 # dst = src  # replace files in src
 
 jpeg_quality = 90
@@ -221,6 +222,20 @@ def process_image(args):
 # -----------------------------------------------------------------------------
 
 def main():
+    global src, dst
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "src",
+        nargs="?",
+        type=Path,
+        default=src,
+        help=f"source directory (default: {src})",
+    )
+    args = parser.parse_args()
+
+    src = args.src
+    dst = Path(f"{src}-compressed")
 
     files = [
         f
@@ -235,6 +250,11 @@ def main():
     if not files:
         print("nothing to do")
         sys.exit()
+
+    print(f"writing {dst}")
+
+    # The output directory is based on the selected source directory.
+    dst.mkdir(parents=True, exist_ok=True)
 
     tasks = [
         (
