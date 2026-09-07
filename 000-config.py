@@ -21,6 +21,17 @@ page_height_mm = 190
 # unbinding removes a small strip (about 5 mm width) from the inside edge
 unbinded_page_width_mm = page_width_mm - 5 # 5 mm width was removed
 
+# TODO use 4 unbinded widths:
+# 1. top width of the first page
+# 2. top width of the last page
+# 3. bottom width of the first page
+# 4. bottom width of the last page
+# for simplicity, we can assume linear gradients between these widths
+unbinded_page_width_front_top_mm = unbinded_page_width_mm + 0
+unbinded_page_width_front_bottom_mm = unbinded_page_width_mm + 0
+unbinded_page_width_back_top_mm = unbinded_page_width_mm + 0
+unbinded_page_width_back_bottom_mm = unbinded_page_width_mm + 0
+
 # which physical page edge is fed first into the document scanner?
 # that edge becomes the scan top edge
 # possible value: "inside" or "top" or "bottom"
