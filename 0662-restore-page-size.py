@@ -1259,6 +1259,9 @@ def main():
                         f"({(corrected_height / original_scan_height - 1) * 100:+.3f}%)"
                     )
 
+            # no. document scanners can distort the scanned height in both directions
+            # so the page width can be smaller or larger than expected
+            r'''
             # -------------------------------------------------------------
             # sanity check
             # -------------------------------------------------------------
@@ -1268,6 +1271,7 @@ def main():
                 print(f"WARNING: image is wider than expected unbinded page aspect ratio: {f.name}")
                 extra_files.append(f)
                 continue
+            '''
 
             # IMPORTANT:
             # We want the height AFTER scanner aspect-ratio correction.
