@@ -32,6 +32,7 @@ from _shared import (
     PageFilter,
     make_filter_page,
     parse_page_sequence,
+    resolve_pdf_page_number,
 )
 
 
