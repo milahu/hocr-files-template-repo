@@ -219,50 +219,6 @@ def sha256_file(path, chunk_size=1024 * 1024):
 # Page handling
 # ----------------------------------------------------------------------
 
-def resolve_pdf_page_number(
-    page_number,
-    page_count,
-):
-    """
-    Convert a user-facing page number to a zero-based PyMuPDF index.
-
-    Positive numbers are one-based:
-
-        1   -> first page
-        2   -> second page
-        123 -> page 123
-
-    Negative numbers count backwards:
-
-        -1 -> last page
-        -2 -> second-to-last page
-
-    Zero is a logical/synthetic page and must be handled by the
-    caller. It is not an original PDF page.
-    """
-
-    if page_number == 0:
-        raise ValueError(
-            "page zero is a logical page and has no original PDF index"
-        )
-
-    if page_number > 0:
-        page_index = page_number - 1
-
-    else:
-        page_index = (
-            page_count + page_number
-        )
-
-    if not 0 <= page_index < page_count:
-        raise ValueError(
-            f"--zero-page {page_number} "
-            f"is outside the PDF page range"
-        )
-
-    return page_index
-
-
 def normalize_pdf_for_printing(
         input_pdf,
         output_pdf,
