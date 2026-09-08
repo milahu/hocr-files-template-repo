@@ -100,6 +100,22 @@ def main():
 
     print(f"done {dst}")
 
+    # explain next steps
+    print()
+    print("next steps:")
+    print()
+    print("run ./06845-show-white-pages.py")
+    print()
+    print("find the lightness thresholds")
+    print("- between white pages and non-white pages -> set config: fill_white_pages_white_lightness_threshold")
+    print("- between non-white pages and text pages -> set config: deskew_white_lightness_threshold")
+    print()
+    print("non-white pages contain only small text elements like page numbers")
+    print("which should be preserved by 0685-fill-white-pages.py")
+    print()
+    print("text pages also contain straight lines of text")
+    print("which can be used to deskew the pages by their contents in 070-deskew.py")
+
 
 if __name__ == "__main__":
     main()
