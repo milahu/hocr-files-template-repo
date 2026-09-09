@@ -709,3 +709,14 @@ def resolve_pdf_page_number(
         )
 
     return page_index
+
+
+def filename_of_page(page_num, config, extension=None) -> str:
+    """
+    return the zero-padded filename of this page
+
+    example: 1 -> "001.tiff"
+    """
+    if extension is None:
+        extension = f".{config.scan_format}"
+    return f"{page_num:0{config.page_num_width}d}{extension}"
