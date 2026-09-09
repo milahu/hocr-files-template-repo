@@ -65,6 +65,8 @@ def run_tesseract(task):
         str(inp),
         "-",
         "-c", "tessedit_create_hocr=1",
+        # produce per-character bounding boxes
+        # "-c", "hocr_char_boxes=1",
         "--dpi", str(config.scan_resolution),
         "-l", config.ocr_lang,
         "--tessdata-dir", config.tessdata_dir,
