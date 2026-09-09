@@ -199,6 +199,10 @@ deskew_black_lightness_threshold = 0.05 / 100 # 0.05%
 # white page with lots of black text can have 0.80
 deskew_dark_lightness_threshold = 25 / 100 # 25%
 
+# dont deskew these pages
+# automatic deskew can fail on pages with images and text
+deskew_ignore_pages = []
+
 
 
 # config for 072-deskew-fix-page-size.py

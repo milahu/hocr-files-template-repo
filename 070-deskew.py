@@ -144,12 +144,24 @@ def main():
             f_dst = dst / f.name
             shutil.copy(f, f_dst)
 
+    # use config.deskew_ignore_pages
+    # dont deskew these pages
+    # automatic deskew can fail on pages with images and text
+    deskew_ignore_pages = getattr(config, "deskew_ignore_pages", [])
+
     # Deskew non-empty pages
     for filepath in image_files:
         filename = os.path.basename(filepath)
         out_path = os.path.join(dst, filename)
 
         if os.path.exists(out_path):
+            continue
+
+        page_num = get_page_num(filename)
+
+        if page_num in deskew_ignore_pages:
+            print(f"Skipping deskew on ignore page {filename}")
+            shutil.copy2(filepath, out_path)
             continue
 
         lightness = page_lightness[filename]
