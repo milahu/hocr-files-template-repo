@@ -57,16 +57,7 @@ def main():
 
     tmp_batch.mkdir(parents=True)
 
-    # allow appending some pages
-    # without having to rename all files
-    max_num_pages = int(max(
-        config.num_pages + 100,
-        config.num_pages * 1.2,
-    ))
-
-    page_num_width = len(str(max_num_pages))
-
-    page_num_fmt = f"%0{page_num_width}d"
+    page_num_fmt = f"%0{config.page_num_width}d"
 
     scanimage_scan_format = config.scan_format
     if scanimage_scan_format == "jpg":
