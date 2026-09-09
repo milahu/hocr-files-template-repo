@@ -7,6 +7,7 @@ from pathlib import Path
 from _shared import (
     load_config,
     get_page_num,
+    filename_of_page,
 )
 
 
@@ -14,12 +15,13 @@ src = Path("040-scan-pages")
 
 
 def shift_page_number(page_num, page_delta, config):
-    page0a = f"{page_num:0{config.page_num_width}d}"
-    new_page_num = page_num + page_delta
-    page0b = f"{new_page_num:0{config.page_num_width}d}"
+    page0a = filename_of_page(page_num, config)
 
-    a = src.joinpath(f"{page0a}.{config.scan_format}")
-    b = src.joinpath(f"{page0b}.{config.scan_format}")
+    new_page_num = page_num + page_delta
+    page0b = filename_of_page(new_page_num, config)
+
+    a = src.joinpath(page0a)
+    b = src.joinpath(page0b)
 
     if not a.exists():
         return
