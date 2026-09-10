@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
 
-# TODO
-r'''
-if autoplay is active, then manual navigation (scroll with mousewheel or arrow left/right) should stop the autplay
-
-add hotkey: enter = fit pages
-
-click on the progress bar = seek to that page (if autoplay was active then stop autoplay)
-
-remove the status bar on the bottom. instead, show the status in the menu bar on the top
-
-zoom should follow the mouse pointer
-'''
-
 import argparse
 import sys
 from collections import OrderedDict
@@ -32,10 +19,12 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QAction,
+    QColor,
     QImage,
     QImageReader,
     QKeySequence,
     QPainter,
+    QPalette,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -50,7 +39,6 @@ from PySide6.QtWidgets import (
     QMenuBar,
     QPushButton,
     QSpinBox,
-    QStatusBar,
     QVBoxLayout,
     QWidget,
 )
@@ -58,141 +46,230 @@ from PySide6.QtWidgets import (
 from _shared import (
     load_config,
     get_page_num,
+    parse_page_sequence,
 )
-
 
 config = load_config()
 
 
-# ---------------------------------------------------------------------------
-# Image loading
-# ---------------------------------------------------------------------------
-
-class ImageLoadSignals(QObject):
-    loaded = Signal(int, QImage)
-
-
 class ImageLoadTask(QRunnable):
-    def __init__(self, index, path):
+    def __init__(self, cache, index, path):
         super().__init__()
+        self.cache = cache
         self.index = index
         self.path = path
-        self.signals = ImageLoadSignals()
+        self.setAutoDelete(True)
 
     def run(self):
-        image = QImage()
-
         reader = QImageReader(str(self.path))
         reader.setAutoTransform(True)
-
         image = reader.read()
 
         if not image.isNull():
-            # Detach the image from the reader/thread.
             image = image.copy()
 
-        self.signals.loaded.emit(self.index, image)
+        cache = self.cache
+        if cache is not None:
+            cache.image_loaded_from_worker(self.index, image)
 
 
 class ImageCache(QObject):
     image_ready = Signal(int)
 
-    def __init__(self, paths, max_images=60):
-        super().__init__()
+    def __init__(self, paths, max_images=60, parent=None):
+        super().__init__(parent)
 
-        self.paths = paths
-        self.max_images = max_images
+        self.paths = list(paths)
+        self.max_images = max(1, int(max_images))
 
         self.images = OrderedDict()
         self.loading = set()
 
         self.mutex = QMutex()
-        self.thread_pool = QThreadPool.globalInstance()
+
+        # Do not parent the thread pool to the cache.  We explicitly control
+        # its lifetime during shutdown.
+        self.thread_pool = QThreadPool()
+        self.thread_pool.setMaxThreadCount(2)
+
+        self.shutting_down = False
 
     def get(self, index):
-        with QMutexLocker(self.mutex):
+        locker = QMutexLocker(self.mutex)
+        try:
             image = self.images.get(index)
 
             if image is not None:
                 self.images.move_to_end(index)
 
             return image
+        finally:
+            locker.unlock()
 
     def has(self, index):
-        with QMutexLocker(self.mutex):
+        locker = QMutexLocker(self.mutex)
+        try:
             return index in self.images
+        finally:
+            locker.unlock()
 
     def request(self, index):
         if index < 0 or index >= len(self.paths):
             return
 
-        with QMutexLocker(self.mutex):
+        locker = QMutexLocker(self.mutex)
+
+        try:
+            if self.shutting_down:
+                return
+
             if index in self.images:
-                self.images.move_to_end(index)
                 return
 
             if index in self.loading:
                 return
 
             self.loading.add(index)
+            path = self.paths[index]
 
-        task = ImageLoadTask(index, self.paths[index])
-        task.signals.loaded.connect(self._image_loaded)
-        self.thread_pool.start(task)
+        finally:
+            locker.unlock()
 
-    def _image_loaded(self, index, image):
-        with QMutexLocker(self.mutex):
+        self.thread_pool.start(
+            ImageLoadTask(self, index, path)
+        )
+
+    def image_loaded_from_worker(self, index, image):
+        """
+        Called by a worker thread.
+
+        IMPORTANT:
+        The worker never directly touches any widget.
+
+        During shutdown we also avoid emitting the Qt signal.  This method
+        therefore becomes a no-op as soon as shutdown starts.
+        """
+
+        should_emit = False
+
+        locker = QMutexLocker(self.mutex)
+
+        try:
             self.loading.discard(index)
 
-            if image.isNull():
-                pass
-            else:
+            if self.shutting_down:
+                return
+
+            if image is not None and not image.isNull():
                 self.images[index] = image
                 self.images.move_to_end(index)
 
                 while len(self.images) > self.max_images:
                     self.images.popitem(last=False)
 
-        self.image_ready.emit(index)
+                should_emit = True
 
+        finally:
+            locker.unlock()
 
-# ---------------------------------------------------------------------------
-# Progress bar
-# ---------------------------------------------------------------------------
+        if not should_emit:
+            return
+
+        # The ImageCache QObject is deliberately kept alive by BookViewer
+        # until after waitForDone() has returned.
+        try:
+            self.image_ready.emit(index)
+        except RuntimeError:
+            # If Qt is already tearing down, silently ignore the late result.
+            pass
+
+    def shutdown(self):
+        """
+        Stop all image loading before the cache QObject can be destroyed.
+        """
+
+        locker = QMutexLocker(self.mutex)
+
+        try:
+            if self.shutting_down:
+                return
+
+            self.shutting_down = True
+
+        finally:
+            locker.unlock()
+
+        # Prevent queued-but-not-started QRunnables from starting.
+        self.thread_pool.clear()
+
+        # Wait for all currently running image decoders.
+        self.thread_pool.waitForDone()
+
+        locker = QMutexLocker(self.mutex)
+
+        try:
+            self.loading.clear()
+
+        finally:
+            locker.unlock()
+
+        # Release the QThreadPool after all workers have finished.
+        self.thread_pool = None
+
 
 class BookProgressBar(QWidget):
+    clicked = Signal(float)
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
         self.position = 0.0
 
         self.setFixedHeight(4)
-        self.setMinimumHeight(4)
-        self.setMaximumHeight(4)
-
-        self.setStyleSheet(
-            """
-            QWidget {
-                background: white;
-            }
-            """
-        )
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet("background: white;")
 
     def set_position(self, position):
-        self.position = max(0.0, min(1.0, float(position)))
+        self.position = max(
+            0.0,
+            min(1.0, float(position)),
+        )
         self.update()
+
+    def mousePressEvent(self, event):
+        if (
+            event.button() == Qt.LeftButton
+            and self.width() > 0
+        ):
+            position = (
+                event.position().x()
+                / self.width()
+            )
+
+            self.clicked.emit(
+                max(0.0, min(1.0, position))
+            )
+
+            event.accept()
+            return
+
+        super().mousePressEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
 
         try:
-            painter.setRenderHint(QPainter.Antialiasing, False)
+            painter.fillRect(
+                self.rect(),
+                QColor("white"),
+            )
 
-            # White background.
-            painter.fillRect(self.rect(), Qt.white)
-
-            # Solid black progress indicator.
-            width = int(self.width() * self.position)
+            width = int(
+                round(
+                    self.width()
+                    * self.position
+                )
+            )
 
             if width > 0:
                 painter.fillRect(
@@ -200,16 +277,12 @@ class BookProgressBar(QWidget):
                     0,
                     width,
                     self.height(),
-                    Qt.black,
+                    QColor("black"),
                 )
 
         finally:
             painter.end()
 
-
-# ---------------------------------------------------------------------------
-# Book canvas
-# ---------------------------------------------------------------------------
 
 class BookCanvas(QWidget):
     def __init__(self, book_viewer, parent=None):
@@ -224,73 +297,115 @@ class BookCanvas(QWidget):
         self.pan = QPointF(0.0, 0.0)
 
         self.dragging = False
-        self.last_mouse_position = QPointF()
+        self.drag_start = QPointF()
+        self.pan_start = QPointF()
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
 
-    # ------------------------------------------------------------------
-    # Images
-    # ------------------------------------------------------------------
+    def background_color(self):
+        if self.book_viewer.is_dark_mode():
+            value = 13
+        else:
+            value = 242
+
+        return QColor(
+            value,
+            value,
+            value,
+        )
 
     def set_images(self, left_image, right_image):
         self.left_image = left_image
         self.right_image = right_image
         self.update()
 
-    # ------------------------------------------------------------------
-    # Zoom
-    # ------------------------------------------------------------------
-
-    def fit_pages(self):
-        if self.left_image is None and self.right_image is None:
-            return
-
-        available_width = max(1, self.width())
-        available_height = max(1, self.height())
-
-        left_width = (
+    def _combined_size(self):
+        left_w = (
             self.left_image.width()
             if self.left_image is not None
             else 0
         )
-        left_height = (
+
+        left_h = (
             self.left_image.height()
             if self.left_image is not None
             else 0
         )
 
-        right_width = (
+        right_w = (
             self.right_image.width()
             if self.right_image is not None
             else 0
         )
-        right_height = (
+
+        right_h = (
             self.right_image.height()
             if self.right_image is not None
             else 0
         )
 
-        combined_width = left_width + right_width
-        combined_height = max(left_height, right_height)
+        return (
+            left_w + right_w,
+            max(left_h, right_h),
+        )
 
-        if combined_width <= 0 or combined_height <= 0:
+    def _base_origin(self, zoom):
+        total_w, total_h = self._combined_size()
+
+        return (
+            (
+                self.width()
+                - total_w * zoom
+            ) / 2.0,
+
+            (
+                self.height()
+                - total_h * zoom
+            ) / 2.0,
+        )
+
+    def fit_pages(self):
+        total_w, total_h = self._combined_size()
+
+        if (
+            total_w <= 0
+            or total_h <= 0
+            or self.width() <= 0
+            or self.height() <= 0
+        ):
             return
 
-        scale_x = available_width / combined_width
-        scale_y = available_height / combined_height
+        scale_x = self.width() / total_w
+        scale_y = self.height() / total_h
 
-        self.zoom = min(scale_x, scale_y)
-        self.pan = QPointF(0.0, 0.0)
+        self.zoom = max(
+            0.01,
+            min(scale_x, scale_y),
+        )
+
+        self.pan = QPointF(
+            0.0,
+            0.0,
+        )
 
         self.update()
 
     def set_zoom(self, zoom, anchor=None):
+        if (
+            self.left_image is None
+            and self.right_image is None
+        ):
+            return
+
         old_zoom = self.zoom
 
-        zoom = max(0.05, min(10.0, float(zoom)))
+        new_zoom = max(
+            0.01,
+            min(20.0, float(zoom)),
+        )
 
-        if abs(zoom - old_zoom) < 1e-9:
+        if abs(new_zoom - old_zoom) < 1e-12:
             return
 
         if anchor is None:
@@ -299,49 +414,180 @@ class BookCanvas(QWidget):
                 self.height() / 2.0,
             )
 
-        # Keep the point under the cursor stationary while zooming.
-        world_x = (anchor.x() - self.pan.x()) / old_zoom
-        world_y = (anchor.y() - self.pan.y()) / old_zoom
+        old_base_x, old_base_y = (
+            self._base_origin(old_zoom)
+        )
 
-        self.zoom = zoom
+        world_x = (
+            anchor.x()
+            - old_base_x
+            - self.pan.x()
+        ) / old_zoom
+
+        world_y = (
+            anchor.y()
+            - old_base_y
+            - self.pan.y()
+        ) / old_zoom
+
+        self.zoom = new_zoom
+
+        new_base_x, new_base_y = (
+            self._base_origin(new_zoom)
+        )
 
         self.pan = QPointF(
-            anchor.x() - world_x * self.zoom,
-            anchor.y() - world_y * self.zoom,
+            anchor.x()
+            - new_base_x
+            - world_x * new_zoom,
+
+            anchor.y()
+            - new_base_y
+            - world_y * new_zoom,
         )
 
         self.update()
 
     def zoom_in(self, anchor=None):
-        self.set_zoom(self.zoom * 1.15, anchor)
+        self.set_zoom(
+            self.zoom * 1.2,
+            anchor,
+        )
 
     def zoom_out(self, anchor=None):
-        self.set_zoom(self.zoom / 1.15, anchor)
+        self.set_zoom(
+            self.zoom / 1.2,
+            anchor,
+        )
 
-    # ------------------------------------------------------------------
-    # Mouse interaction
-    # ------------------------------------------------------------------
+    def _display_image(self, image):
+        if image is None:
+            return None
+
+        if not self.book_viewer.is_dark_mode():
+            return image
+
+        inverted = image.copy()
+        inverted.invertPixels(
+            QImage.InvertRgb
+        )
+
+        return inverted
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+
+        try:
+            painter.fillRect(
+                self.rect(),
+                self.background_color(),
+            )
+
+            images = []
+
+            if self.left_image is not None:
+                images.append(self.left_image)
+
+            if self.right_image is not None:
+                images.append(self.right_image)
+
+            if not images:
+                return
+
+            base_x, base_y = (
+                self._base_origin(self.zoom)
+            )
+
+            x = (
+                base_x
+                + self.pan.x()
+            )
+
+            y = (
+                base_y
+                + self.pan.y()
+            )
+
+            painter.setRenderHint(
+                QPainter.SmoothPixmapTransform,
+                False,
+            )
+
+            for source_image in images:
+                image = self._display_image(
+                    source_image
+                )
+
+                draw_w = (
+                    image.width()
+                    * self.zoom
+                )
+
+                draw_h = (
+                    image.height()
+                    * self.zoom
+                )
+
+                if abs(self.zoom - 1.0) < 1e-12:
+                    painter.drawImage(
+                        int(round(x)),
+                        int(round(y)),
+                        image,
+                    )
+                else:
+                    painter.drawImage(
+                        QRectF(
+                            x,
+                            y,
+                            draw_w,
+                            draw_h,
+                        ),
+                        image,
+                        QRectF(
+                            0,
+                            0,
+                            image.width(),
+                            image.height(),
+                        ),
+                    )
+
+                x += draw_w
+
+        finally:
+            painter.end()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.dragging = True
-            self.last_mouse_position = event.position()
-            self.setCursor(Qt.ClosedHandCursor)
+            self.drag_start = event.position()
+            self.pan_start = QPointF(
+                self.pan
+            )
+
+            self.setCursor(
+                Qt.ClosedHandCursor
+            )
+
             event.accept()
             return
 
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        # Notify the main window so fullscreen chrome can be revealed.
-        self.book_viewer.handle_mouse_move(event.position())
+        self.book_viewer.handle_mouse_move(
+            event.position()
+        )
 
         if self.dragging:
-            current = event.position()
-            delta = current - self.last_mouse_position
+            delta = (
+                event.position()
+                - self.drag_start
+            )
 
-            self.pan += delta
-            self.last_mouse_position = current
+            self.pan = (
+                self.pan_start
+                + delta
+            )
 
             self.update()
 
@@ -351,153 +597,104 @@ class BookCanvas(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if (
+            event.button() == Qt.LeftButton
+            and self.dragging
+        ):
             self.dragging = False
-            self.setCursor(Qt.ArrowCursor)
+            self.unsetCursor()
+
             event.accept()
             return
 
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event):
-        delta = event.angleDelta().y()
+        modifiers = event.modifiers()
 
-        if delta == 0:
-            event.ignore()
-            return
+        if modifiers & Qt.ControlModifier:
+            if event.angleDelta().y() > 0:
+                self.zoom_in(
+                    event.position()
+                )
 
-        if event.modifiers() & Qt.ControlModifier:
-            if delta > 0:
-                self.zoom_in(event.position())
-            else:
-                self.zoom_out(event.position())
+            elif event.angleDelta().y() < 0:
+                self.zoom_out(
+                    event.position()
+                )
 
             event.accept()
             return
 
-        # Normal mouse wheel = page navigation.
-        #
-        # Positive wheel delta is "up" -> previous page.
-        # Negative wheel delta is "down" -> next page.
-        if delta > 0:
+        if event.angleDelta().y() > 0:
             self.book_viewer.previous_spread()
-        else:
+
+        elif event.angleDelta().y() < 0:
             self.book_viewer.next_spread()
 
         event.accept()
 
-    # ------------------------------------------------------------------
-    # Painting
-    # ------------------------------------------------------------------
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.book_viewer.fit_pages()
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
+            event.accept()
+            return
 
-        try:
-            painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
+        super().mouseDoubleClickEvent(event)
 
-            painter.fillRect(self.rect(), Qt.black)
-
-            if self.left_image is None and self.right_image is None:
-                return
-
-            images = []
-
-            if self.left_image is not None:
-                images.append(("left", self.left_image))
-
-            if self.right_image is not None:
-                images.append(("right", self.right_image))
-
-            total_width = sum(image.width() for _, image in images)
-            max_height = max(
-                image.height()
-                for _, image in images
-            )
-
-            if total_width <= 0 or max_height <= 0:
-                return
-
-            scaled_width = total_width * self.zoom
-            scaled_height = max_height * self.zoom
-
-            origin_x = (
-                (self.width() - scaled_width) / 2.0
-                + self.pan.x()
-            )
-
-            origin_y = (
-                (self.height() - scaled_height) / 2.0
-                + self.pan.y()
-            )
-
-            x = origin_x
-
-            for side, image in images:
-                image_width = image.width() * self.zoom
-                image_height = image.height() * self.zoom
-
-                y = (
-                    origin_y
-                    + (scaled_height - image_height) / 2.0
-                )
-
-                # At 1:1, draw directly in native pixels for maximum
-                # sharpness. At other zoom levels, use a QRectF.
-                if abs(self.zoom - 1.0) < 1e-9:
-                    painter.drawImage(
-                        int(round(x)),
-                        int(round(y)),
-                        image,
-                    )
-                else:
-                    target = QRectF(
-                        x,
-                        y,
-                        image_width,
-                        image_height,
-                    )
-
-                    painter.drawImage(
-                        target,
-                        image,
-                    )
-
-                x += image_width
-
-        finally:
-            painter.end()
-
-
-# ---------------------------------------------------------------------------
-# Settings dialog
-# ---------------------------------------------------------------------------
 
 class PlaybackSettingsDialog(QDialog):
-    def __init__(self, page_time, preload_spreads, parent=None):
+    def __init__(
+        self,
+        page_time,
+        preload_spreads,
+        parent=None,
+    ):
         super().__init__(parent)
 
-        self.setWindowTitle("Playback settings")
+        self.setWindowTitle(
+            "Playback settings"
+        )
 
-        layout = QFormLayout(self)
+        self.page_time_spin = (
+            QDoubleSpinBox()
+        )
 
-        self.page_time_spin = QDoubleSpinBox()
-        self.page_time_spin.setRange(0.01, 60.0)
+        self.page_time_spin.setRange(
+            0.01,
+            60.0,
+        )
+
+        self.page_time_spin.setSingleStep(
+            0.05
+        )
+
         self.page_time_spin.setDecimals(2)
-        self.page_time_spin.setSingleStep(0.05)
-        self.page_time_spin.setValue(page_time)
         self.page_time_spin.setSuffix(" s")
+        self.page_time_spin.setValue(
+            page_time
+        )
 
         self.preload_spin = QSpinBox()
-        self.preload_spin.setRange(0, 500)
-        self.preload_spin.setValue(preload_spreads)
 
-        layout.addRow(
+        self.preload_spin.setRange(
+            0,
+            500,
+        )
+
+        self.preload_spin.setValue(
+            preload_spreads
+        )
+
+        form = QFormLayout()
+
+        form.addRow(
             "Time per spread:",
             self.page_time_spin,
         )
 
-        layout.addRow(
+        form.addRow(
             "Preload spreads:",
             self.preload_spin,
         )
@@ -507,31 +704,43 @@ class PlaybackSettingsDialog(QDialog):
             | QDialogButtonBox.Cancel
         )
 
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-
-        layout.addRow(buttons)
-
-
-# ---------------------------------------------------------------------------
-# Main window
-# ---------------------------------------------------------------------------
-
-class BookViewer(QMainWindow):
-    def __init__(self, source_dir):
-        super().__init__()
-
-        self.source_dir = Path(source_dir)
-
-        self.setWindowTitle(
-            f"Book Viewer — {self.source_dir.name}"
+        buttons.accepted.connect(
+            self.accept
         )
 
-        self.resize(1400, 900)
+        buttons.rejected.connect(
+            self.reject
+        )
 
-        # --------------------------------------------------------------
-        # Configuration
-        # --------------------------------------------------------------
+        layout = QVBoxLayout(self)
+
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+
+
+class BookViewer(QMainWindow):
+    def __init__(
+        self,
+        source_dir,
+        page_spec=None,
+        parent=None,
+    ):
+        super().__init__(parent)
+
+        self.source_dir = Path(
+            source_dir
+        )
+
+        self.page_spec = page_spec
+
+        self.setWindowTitle(
+            self.source_dir.name
+        )
+
+        self.resize(
+            1400,
+            900,
+        )
 
         self.page_time = 0.2
         self.preload_spreads = 20
@@ -540,301 +749,389 @@ class BookViewer(QMainWindow):
         self.playing = False
         self.current_spread = 0
 
-        self._initial_fit_pending = True
         self._fullscreen = False
+        self._shutting_down = False
+        self._initial_fit_pending = True
 
         self._chrome_timer = QTimer(self)
-        self._chrome_timer.setSingleShot(True)
+        self._chrome_timer.setSingleShot(
+            True
+        )
+        self._chrome_timer.setInterval(
+            1800
+        )
         self._chrome_timer.timeout.connect(
             self._hide_fullscreen_chrome
         )
-
-        # --------------------------------------------------------------
-        # Find pages
-        # --------------------------------------------------------------
-
-        extension = str(config.scan_format).lower().lstrip(".")
-
-        self.paths = sorted(
-            [
-                p
-                for p in self.source_dir.iterdir()
-                if p.is_file()
-                and p.suffix.lower().lstrip(".") == extension
-            ],
-            key=self._page_sort_key,
-        )
-
-        if not self.paths:
-            raise RuntimeError(
-                f"No .{extension} images found in "
-                f"{self.source_dir}"
-            )
-
-        # --------------------------------------------------------------
-        # Build spreads
-        #
-        # Page 1 alone on right.
-        # Pages 2-3
-        # Pages 4-5
-        # ...
-        #
-        # If the book ends on an even page, that final page is alone
-        # on the left.
-        # --------------------------------------------------------------
-
-        self.spreads = []
-
-        first = {
-            "left": None,
-            "right": 0,
-        }
-
-        self.spreads.append(first)
-
-        index = 1
-
-        while index < len(self.paths):
-            left = index
-            right = index + 1
-
-            self.spreads.append(
-                {
-                    "left": left,
-                    "right": right
-                    if right < len(self.paths)
-                    else None,
-                }
-            )
-
-            index += 2
-
-        # --------------------------------------------------------------
-        # Cache
-        # --------------------------------------------------------------
-
-        self.cache = ImageCache(
-            self.paths,
-            max_images=self.max_cache_images,
-        )
-
-        self.cache.image_ready.connect(
-            self._image_ready
-        )
-
-        # --------------------------------------------------------------
-        # Canvas
-        # --------------------------------------------------------------
-
-        self.canvas = BookCanvas(
-            self,
-            self,
-        )
-
-        # --------------------------------------------------------------
-        # Progress bar
-        # --------------------------------------------------------------
-
-        self.progress_bar = BookProgressBar()
-
-        central = QWidget()
-        central_layout = QVBoxLayout(central)
-        central_layout.setContentsMargins(0, 0, 0, 0)
-        central_layout.setSpacing(0)
-
-        central_layout.addWidget(self.canvas, 1)
-        central_layout.addWidget(self.progress_bar, 0)
-
-        self.setCentralWidget(central)
-
-        # --------------------------------------------------------------
-        # Menu bar
-        # --------------------------------------------------------------
-
-        self._build_menu()
-
-        # --------------------------------------------------------------
-        # Status bar
-        # --------------------------------------------------------------
-
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-
-        # --------------------------------------------------------------
-        # Page navigation
-        # --------------------------------------------------------------
-
-        self.previous_action = QAction(
-            "Previous",
-            self,
-        )
-        self.previous_action.setShortcut(
-            QKeySequence(Qt.Key_Left)
-        )
-        self.previous_action.triggered.connect(
-            self.previous_spread
-        )
-
-        self.next_action = QAction(
-            "Next",
-            self,
-        )
-        self.next_action.setShortcut(
-            QKeySequence(Qt.Key_Right)
-        )
-        self.next_action.triggered.connect(
-            self.next_spread
-        )
-
-        self.current_page_edit = QLineEdit()
-        self.current_page_edit.setFixedWidth(70)
-        self.current_page_edit.setAlignment(
-            Qt.AlignCenter
-        )
-
-        self.current_page_edit.returnPressed.connect(
-            self._page_edit_return_pressed
-        )
-
-        self.nav_widget = QWidget()
-        nav_layout = QHBoxLayout(self.nav_widget)
-        nav_layout.setContentsMargins(4, 0, 4, 0)
-        nav_layout.setSpacing(2)
-
-        previous_button = QPushButton("◀")
-        previous_button.setFixedWidth(28)
-        previous_button.clicked.connect(
-            self.previous_spread
-        )
-
-        next_button = QPushButton("▶")
-        next_button.setFixedWidth(28)
-        next_button.clicked.connect(
-            self.next_spread
-        )
-
-        nav_layout.addWidget(previous_button)
-        nav_layout.addWidget(self.current_page_edit)
-        nav_layout.addWidget(next_button)
-
-        self.menu_bar.setCornerWidget(
-            self.nav_widget,
-            Qt.TopRightCorner,
-        )
-
-        # --------------------------------------------------------------
-        # Playback
-        # --------------------------------------------------------------
 
         self.play_timer = QTimer(self)
         self.play_timer.timeout.connect(
             self._advance_autoplay
         )
 
-        self._update_page_time()
+        self.paths = self._find_paths()
 
-        # --------------------------------------------------------------
-        # Show first spread
-        # --------------------------------------------------------------
+        self.page_indices = (
+            self._build_page_indices(
+                page_spec
+            )
+        )
+
+        self.spreads = (
+            self._build_spreads(
+                self.page_indices
+            )
+        )
+
+        self.cache = ImageCache(
+            self.paths,
+            max_images=self.max_cache_images,
+            parent=self,
+        )
+
+        self.cache.image_ready.connect(
+            self._image_ready,
+            Qt.QueuedConnection,
+        )
+
+        self.canvas = BookCanvas(
+            self,
+            self,
+        )
+
+        self.progress = BookProgressBar(
+            self
+        )
+
+        self.progress.clicked.connect(
+            self._progress_clicked
+        )
+
+        self.status_label = QLabel(
+            "No pages"
+        )
+
+        self.current_page_edit = (
+            QLineEdit()
+        )
+
+        self.current_page_edit.setFixedWidth(
+            80
+        )
+
+        self.current_page_edit.setAlignment(
+            Qt.AlignCenter
+        )
+
+        self.current_page_edit.setPlaceholderText(
+            "Page"
+        )
+
+        self.current_page_edit.returnPressed.connect(
+            self._page_edit_return
+        )
+
+        self.previous_button = QPushButton(
+            "◀"
+        )
+
+        self.next_button = QPushButton(
+            "▶"
+        )
+
+        self.previous_button.setFixedWidth(
+            36
+        )
+
+        self.next_button.setFixedWidth(
+            36
+        )
+
+        self.previous_button.clicked.connect(
+            self.previous_spread
+        )
+
+        self.next_button.clicked.connect(
+            self.next_spread
+        )
+
+        self._build_menu()
+
+        central = QWidget(self)
+
+        central_layout = QVBoxLayout(
+            central
+        )
+
+        central_layout.setContentsMargins(
+            0,
+            0,
+            0,
+            0,
+        )
+
+        central_layout.setSpacing(0)
+
+        central_layout.addWidget(
+            self.canvas,
+            1,
+        )
+
+        central_layout.addWidget(
+            self.progress,
+            0,
+        )
+
+        self.setCentralWidget(
+            central
+        )
 
         self._show_current_spread()
-
-        # --------------------------------------------------------------
-        # Start fullscreen after the window has been created.
-        # --------------------------------------------------------------
 
         QTimer.singleShot(
             0,
             self._start_fullscreen,
         )
 
-    # ------------------------------------------------------------------
-    # Page sorting
-    # ------------------------------------------------------------------
-
-    def _page_sort_key(self, path):
+    def is_dark_mode(self):
         try:
-            return (
-                0,
-                get_page_num(path),
-            )
-        except Exception:
-            return (
-                1,
-                path.name.lower(),
+            scheme = (
+                QApplication
+                .styleHints()
+                .colorScheme()
             )
 
-    # ------------------------------------------------------------------
-    # Menus
-    # ------------------------------------------------------------------
+            if scheme == Qt.ColorScheme.Dark:
+                return True
+
+            if scheme == Qt.ColorScheme.Light:
+                return False
+
+        except AttributeError:
+            pass
+
+        palette = QApplication.palette()
+
+        return (
+            palette
+            .color(QPalette.Window)
+            .lightness()
+            < 128
+        )
+
+    def _find_paths(self):
+        suffix = (
+            str(config.scan_format)
+            .lower()
+            .lstrip(".")
+        )
+
+        paths = [
+            path
+            for path in self.source_dir.iterdir()
+            if (
+                path.is_file()
+                and path.suffix.lower().lstrip(".")
+                == suffix
+            )
+        ]
+
+        paths.sort(
+            key=get_page_num
+        )
+
+        return paths
+
+    def _build_page_indices(
+        self,
+        page_spec,
+    ):
+        num_pages = int(
+            config.num_pages
+        )
+
+        page_to_index = {}
+
+        for index, path in enumerate(
+            self.paths
+        ):
+            page = int(
+                get_page_num(path)
+            )
+
+            if 1 <= page <= num_pages:
+                page_to_index[page] = index
+
+        if page_spec is None:
+            selected_pages = list(
+                range(
+                    1,
+                    num_pages + 1,
+                )
+            )
+        else:
+            selected_pages = list(
+                parse_page_sequence(
+                    page_spec,
+                    num_pages,
+                )
+            )
+
+        return [
+            page_to_index[page]
+            for page in selected_pages
+            if page in page_to_index
+        ]
+
+    def _build_spreads(
+        self,
+        page_indices,
+    ):
+        spreads = []
+        pos = 0
+
+        while pos < len(page_indices):
+            index = page_indices[pos]
+
+            page = int(
+                get_page_num(
+                    self.paths[index]
+                )
+            )
+
+            if (
+                page % 2 == 0
+                and pos + 1
+                < len(page_indices)
+            ):
+                next_index = (
+                    page_indices[pos + 1]
+                )
+
+                next_page = int(
+                    get_page_num(
+                        self.paths[next_index]
+                    )
+                )
+
+                if next_page == page + 1:
+                    spreads.append(
+                        (
+                            index,
+                            next_index,
+                        )
+                    )
+
+                    pos += 2
+                    continue
+
+            if page % 2 == 0:
+                spreads.append(
+                    (
+                        index,
+                        None,
+                    )
+                )
+            else:
+                spreads.append(
+                    (
+                        None,
+                        index,
+                    )
+                )
+
+            pos += 1
+
+        return spreads
 
     def _build_menu(self):
-        self.menu_bar = QMenuBar(self)
-        self.setMenuBar(self.menu_bar)
+        menu_bar = QMenuBar(self)
 
-        file_menu = self.menu_bar.addMenu("File")
+        file_menu = menu_bar.addMenu(
+            "&File"
+        )
 
         quit_action = QAction(
-            "Quit",
+            "&Quit",
             self,
         )
+
         quit_action.setShortcut(
             QKeySequence("Q")
         )
+
         quit_action.triggered.connect(
             self.close
         )
 
-        file_menu.addAction(quit_action)
+        file_menu.addAction(
+            quit_action
+        )
 
-        view_menu = self.menu_bar.addMenu("View")
+        view_menu = menu_bar.addMenu(
+            "&View"
+        )
 
         fullscreen_action = QAction(
-            "Fullscreen",
+            "&Fullscreen",
             self,
         )
+
         fullscreen_action.setShortcut(
             QKeySequence("F")
         )
+
         fullscreen_action.triggered.connect(
             self.toggle_fullscreen
         )
 
-        view_menu.addAction(fullscreen_action)
+        view_menu.addAction(
+            fullscreen_action
+        )
 
         fit_action = QAction(
-            "Fit pages",
+            "&Fit pages",
             self,
         )
+
+        fit_action.setShortcut(
+            QKeySequence("Return")
+        )
+
         fit_action.triggered.connect(
-            self.canvas.fit_pages
+            self.fit_pages
         )
 
-        view_menu.addAction(fit_action)
-
-        playback_menu = self.menu_bar.addMenu(
-            "Playback"
+        view_menu.addAction(
+            fit_action
         )
 
-        self.play_action = QAction(
-            "Play / Pause",
+        playback_menu = menu_bar.addMenu(
+            "&Playback"
+        )
+
+        play_action = QAction(
+            "&Play / Pause",
             self,
         )
-        self.play_action.setShortcut(
-            QKeySequence(Qt.Key_Space)
+
+        play_action.setShortcut(
+            QKeySequence("Space")
         )
-        self.play_action.triggered.connect(
+
+        play_action.triggered.connect(
             self.toggle_playback
         )
 
         playback_menu.addAction(
-            self.play_action
+            play_action
         )
 
         settings_action = QAction(
-            "Settings...",
+            "&Settings",
             self,
         )
+
         settings_action.triggered.connect(
             self.show_playback_settings
         )
@@ -843,152 +1140,201 @@ class BookViewer(QMainWindow):
             settings_action
         )
 
-    # ------------------------------------------------------------------
-    # Spread navigation
-    # ------------------------------------------------------------------
+        controls = QWidget(self)
 
-    def _show_current_spread(self):
-        if not self.spreads:
-            return
+        controls_layout = QHBoxLayout(
+            controls
+        )
 
-        self.current_spread = max(
+        controls_layout.setContentsMargins(
+            4,
             0,
-            min(
-                self.current_spread,
-                len(self.spreads) - 1,
-            ),
+            4,
+            0,
         )
 
-        spread = self.spreads[self.current_spread]
+        controls_layout.setSpacing(4)
 
-        # --------------------------------------------------------------
-        # Bidirectional preload.
-        #
-        # Current spread first, then alternately backwards and forwards.
-        # This makes previous/next equally responsive.
-        # --------------------------------------------------------------
-
-        self._preload_around_current()
-
-        # --------------------------------------------------------------
-        # Display currently cached images.
-        # --------------------------------------------------------------
-
-        left_image = None
-        right_image = None
-
-        if spread["left"] is not None:
-            left_image = self.cache.get(
-                spread["left"]
-            )
-
-        if spread["right"] is not None:
-            right_image = self.cache.get(
-                spread["right"]
-            )
-
-        self.canvas.set_images(
-            left_image,
-            right_image,
+        controls_layout.addWidget(
+            self.status_label
         )
 
-        # --------------------------------------------------------------
-        # If the current spread is not yet decoded, wait for it.
-        # --------------------------------------------------------------
+        controls_layout.addWidget(
+            self.previous_button
+        )
 
-        if (
-            spread["left"] is not None
-            and left_image is None
-        ):
-            self.cache.request(
-                spread["left"]
-            )
+        controls_layout.addWidget(
+            self.current_page_edit
+        )
 
-        if (
-            spread["right"] is not None
-            and right_image is None
-        ):
-            self.cache.request(
-                spread["right"]
-            )
+        controls_layout.addWidget(
+            self.next_button
+        )
 
-        # --------------------------------------------------------------
-        # Update UI.
-        # --------------------------------------------------------------
+        menu_bar.setCornerWidget(
+            controls,
+            Qt.TopRightCorner,
+        )
 
-        self._update_page_display()
-        self._update_progress()
-        self._update_status()
-
-        # Initial fit is deliberately delayed until the first spread's
-        # images have actually been decoded.
-        if self._initial_fit_pending:
-            if self._current_spread_is_loaded():
-                self.canvas.fit_pages()
-                self._initial_fit_pending = False
+        self.setMenuBar(
+            menu_bar
+        )
 
     def _current_spread_is_loaded(self):
-        spread = self.spreads[self.current_spread]
+        if not self.spreads:
+            return False
+
+        left_index, right_index = (
+            self.spreads[
+                self.current_spread
+            ]
+        )
 
         if (
-            spread["left"] is not None
-            and not self.cache.has(spread["left"])
+            left_index is not None
+            and not self.cache.has(
+                left_index
+            )
         ):
             return False
 
         if (
-            spread["right"] is not None
-            and not self.cache.has(spread["right"])
+            right_index is not None
+            and not self.cache.has(
+                right_index
+            )
         ):
             return False
 
         return True
 
+    def _get_current_images(self):
+        if not self.spreads:
+            return None, None
+
+        left_index, right_index = (
+            self.spreads[
+                self.current_spread
+            ]
+        )
+
+        left_image = (
+            self.cache.get(left_index)
+            if left_index is not None
+            else None
+        )
+
+        right_image = (
+            self.cache.get(right_index)
+            if right_index is not None
+            else None
+        )
+
+        return (
+            left_image,
+            right_image,
+        )
+
+    def _show_current_spread(self):
+        if (
+            self._shutting_down
+            or not self.spreads
+        ):
+            return
+
+        left_index, right_index = (
+            self.spreads[
+                self.current_spread
+            ]
+        )
+
+        if left_index is not None:
+            self.cache.request(
+                left_index
+            )
+
+        if right_index is not None:
+            self.cache.request(
+                right_index
+            )
+
+        self._preload_around_current()
+
+        # Do not clear the old image while loading the new spread.
+        if self._current_spread_is_loaded():
+            (
+                left_image,
+                right_image,
+            ) = self._get_current_images()
+
+            self.canvas.set_images(
+                left_image,
+                right_image,
+            )
+
+            if self._initial_fit_pending:
+                self.canvas.fit_pages()
+                self._initial_fit_pending = False
+
+        self._update_page_edit()
+        self._update_progress()
+        self._update_status()
+
     def _preload_around_current(self):
         if not self.spreads:
             return
 
-        current = self.current_spread
-
-        order = [current]
+        count = len(self.spreads)
+        center = self.current_spread
 
         for distance in range(
             1,
             self.preload_spreads + 1,
         ):
-            backward = current - distance
-            forward = current + distance
+            for index in (
+                center - distance,
+                center + distance,
+            ):
+                if 0 <= index < count:
+                    (
+                        left_index,
+                        right_index,
+                    ) = self.spreads[index]
 
-            if backward >= 0:
-                order.append(backward)
+                    if left_index is not None:
+                        self.cache.request(
+                            left_index
+                        )
 
-            if forward < len(self.spreads):
-                order.append(forward)
+                    if right_index is not None:
+                        self.cache.request(
+                            right_index
+                        )
 
-        for spread_index in order:
-            spread = self.spreads[spread_index]
+    def _stop_playback(self):
+        self.playing = False
+        self.play_timer.stop()
+        self._update_status()
 
-            if spread["left"] is not None:
-                self.cache.request(
-                    spread["left"]
-                )
-
-            if spread["right"] is not None:
-                self.cache.request(
-                    spread["right"]
-                )
+    def _stop_playback_for_manual_navigation(
+        self
+    ):
+        if self.playing:
+            self._stop_playback()
 
     def next_spread(self):
-        """
-        Advance one spread.
-
-        Manual navigation wraps around:
-            last -> first
-        """
-        if not self.spreads:
+        if (
+            self._shutting_down
+            or not self.spreads
+        ):
             return
 
-        if self.current_spread >= len(self.spreads) - 1:
+        self._stop_playback_for_manual_navigation()
+
+        if (
+            self.current_spread
+            >= len(self.spreads) - 1
+        ):
             self.current_spread = 0
         else:
             self.current_spread += 1
@@ -996,429 +1342,505 @@ class BookViewer(QMainWindow):
         self._show_current_spread()
 
     def previous_spread(self):
-        """
-        Go back one spread.
-
-        Manual navigation wraps around:
-            first -> last
-        """
-        if not self.spreads:
+        if (
+            self._shutting_down
+            or not self.spreads
+        ):
             return
 
+        self._stop_playback_for_manual_navigation()
+
         if self.current_spread <= 0:
-            self.current_spread = len(self.spreads) - 1
+            self.current_spread = (
+                len(self.spreads) - 1
+            )
         else:
             self.current_spread -= 1
 
         self._show_current_spread()
 
-    # ------------------------------------------------------------------
-    # Page-number navigation
-    # ------------------------------------------------------------------
+    def _visible_page(self):
+        if not self.spreads:
+            return None
 
-    def _visible_page_index(self):
-        spread = self.spreads[self.current_spread]
-
-        if spread["left"] is not None:
-            return spread["left"]
-
-        return spread["right"]
-
-    def _visible_page_number(self):
-        index = self._visible_page_index()
-
-        if index is None:
-            return ""
-
-        try:
-            return str(
-                get_page_num(
-                    self.paths[index]
-                )
-            )
-        except Exception:
-            return str(index + 1)
-
-    def _update_page_display(self):
-        self.current_page_edit.setText(
-            self._visible_page_number()
+        left_index, right_index = (
+            self.spreads[
+                self.current_spread
+            ]
         )
 
-    def _page_edit_return_pressed(self):
-        text = self.current_page_edit.text().strip()
+        if left_index is not None:
+            return int(
+                get_page_num(
+                    self.paths[left_index]
+                )
+            )
 
-        if not text:
-            self._update_page_display()
-            return
+        if right_index is not None:
+            return int(
+                get_page_num(
+                    self.paths[right_index]
+                )
+            )
+
+        return None
+
+    def _update_page_edit(self):
+        page = self._visible_page()
+
+        if page is None:
+            self.current_page_edit.clear()
+        else:
+            self.current_page_edit.setText(
+                str(page)
+            )
+
+    def _page_edit_return(self):
+        text = (
+            self.current_page_edit
+            .text()
+            .strip()
+        )
 
         try:
-            target_page = int(text)
+            page = int(text)
         except ValueError:
-            self._update_page_display()
+            self._update_page_edit()
             return
 
-        self.go_to_page(target_page)
+        self.go_to_page(page)
 
     def go_to_page(self, page_number):
-        if not self.paths:
+        if (
+            self._shutting_down
+            or not self.spreads
+        ):
             return
 
-        # First try an exact page-number match.
-        exact_index = None
+        self._stop_playback_for_manual_navigation()
 
-        for index, path in enumerate(self.paths):
-            try:
-                if get_page_num(path) == page_number:
-                    exact_index = index
+        exact_target = None
+        closest_target = None
+        closest_distance = None
+
+        for position, spread in enumerate(
+            self.spreads
+        ):
+            left_index, right_index = spread
+
+            for index in (
+                left_index,
+                right_index,
+            ):
+                if index is None:
+                    continue
+
+                page = int(
+                    get_page_num(
+                        self.paths[index]
+                    )
+                )
+
+                if page == page_number:
+                    exact_target = position
                     break
-            except Exception:
-                continue
-
-        if exact_index is None:
-            # Fall back to the closest page by filename/index.
-            best_index = None
-            best_distance = None
-
-            for index, path in enumerate(self.paths):
-                try:
-                    number = get_page_num(path)
-                except Exception:
-                    number = index + 1
 
                 distance = abs(
-                    number - page_number
+                    page - page_number
                 )
 
                 if (
-                    best_distance is None
-                    or distance < best_distance
+                    closest_distance is None
+                    or distance < closest_distance
                 ):
-                    best_distance = distance
-                    best_index = index
+                    closest_distance = distance
+                    closest_target = position
 
-            exact_index = best_index
+            if exact_target is not None:
+                break
 
-        if exact_index is None:
+        target = (
+            exact_target
+            if exact_target is not None
+            else closest_target
+        )
+
+        if target is not None:
+            self.current_spread = target
+            self._show_current_spread()
+
+    def _progress_clicked(self, position):
+        if (
+            self._shutting_down
+            or not self.spreads
+        ):
             return
 
-        # Page 1 belongs to the first spread.
-        if exact_index == 0:
+        self._stop_playback_for_manual_navigation()
+
+        if len(self.spreads) == 1:
             self.current_spread = 0
         else:
-            self.current_spread = (
-                (exact_index - 1) // 2
-            ) + 1
+            self.current_spread = int(
+                round(
+                    position
+                    * (len(self.spreads) - 1)
+                )
+            )
+
+            self.current_spread = max(
+                0,
+                min(
+                    len(self.spreads) - 1,
+                    self.current_spread,
+                ),
+            )
 
         self._show_current_spread()
 
-    # ------------------------------------------------------------------
-    # Cache notifications
-    # ------------------------------------------------------------------
-
-    def _image_ready(self, index):
-        spread = self.spreads[self.current_spread]
-
-        if index in (
-            spread["left"],
-            spread["right"],
-        ):
-            self._show_current_spread()
-
-        # Autoplay waits until the current spread is ready before moving.
-        if self.playing:
-            self._maybe_start_autoplay_timer()
-
-    # ------------------------------------------------------------------
-    # Autoplay
-    # ------------------------------------------------------------------
-
-    def toggle_playback(self):
-        if not self.spreads:
+    def fit_pages(self):
+        if self._shutting_down:
             return
 
-        if self.playing:
-            self._stop_playback()
-            return
+        self._preload_around_current()
 
-        # IMPORTANT:
-        #
-        # If autoplay previously reached the final spread, pressing
-        # Space again restarts playback from the beginning.
-        if self.current_spread >= len(self.spreads) - 1:
-            self.current_spread = 0
-            self._show_current_spread()
-
-        self._start_playback()
-
-    def _start_playback(self):
-        if self.playing:
-            return
-
-        self.playing = True
-
-        self._update_status()
-        self._maybe_start_autoplay_timer()
-
-    def _stop_playback(self):
-        self.playing = False
-        self.play_timer.stop()
-
-        self._update_status()
-
-    def _maybe_start_autoplay_timer(self):
-        if not self.playing:
-            return
-
-        if self.current_spread >= len(self.spreads) - 1:
-            # Autoplay deliberately stops at the last spread.
-            self._stop_playback()
-            return
-
-        # Don't advance until the current spread is actually available.
-        if not self._current_spread_is_loaded():
-            self._preload_around_current()
-            return
-
-        # Also request the next spread explicitly.
-        next_index = self.current_spread + 1
-
-        if next_index < len(self.spreads):
-            next_spread = self.spreads[next_index]
-
-            if next_spread["left"] is not None:
-                self.cache.request(
-                    next_spread["left"]
-                )
-
-            if next_spread["right"] is not None:
-                self.cache.request(
-                    next_spread["right"]
-                )
-
-        if not self.play_timer.isActive():
-            self.play_timer.start(
-                max(
-                    1,
-                    int(self.page_time * 1000),
-                )
-            )
-
-    def _advance_autoplay(self):
-        if not self.playing:
-            return
-
-        # Stop at the final spread.
-        #
-        # We do NOT wrap automatically because the requested behavior is:
-        #   autoplay reaches last page -> stop
-        #   press autoplay again -> restart at first page
-        if self.current_spread >= len(self.spreads) - 1:
-            self._stop_playback()
-            return
-
-        next_index = self.current_spread + 1
-
-        next_spread = self.spreads[next_index]
-
-        # Wait for the next spread to be cached before advancing.
-        if (
-            next_spread["left"] is not None
-            and not self.cache.has(
-                next_spread["left"]
-            )
-        ):
-            self.play_timer.stop()
-
-            self.cache.request(
-                next_spread["left"]
-            )
-
-            if next_spread["right"] is not None:
-                self.cache.request(
-                    next_spread["right"]
-                )
-
-            return
-
-        if (
-            next_spread["right"] is not None
-            and not self.cache.has(
-                next_spread["right"]
-            )
-        ):
-            self.play_timer.stop()
-
-            self.cache.request(
-                next_spread["right"]
-            )
-
-            return
-
-        self.current_spread = next_index
-
-        self._show_current_spread()
-
-        # Restart timer for the newly displayed spread.
-        self.play_timer.start(
-            max(
-                1,
-                int(self.page_time * 1000),
-            )
-        )
-
-    def _update_page_time(self):
-        self.play_timer.setInterval(
-            max(
-                1,
-                int(self.page_time * 1000),
-            )
-        )
-
-    # ------------------------------------------------------------------
-    # Settings
-    # ------------------------------------------------------------------
+        if self._current_spread_is_loaded():
+            self.canvas.fit_pages()
+            self._initial_fit_pending = False
 
     def show_playback_settings(self):
+        if self._shutting_down:
+            return
+
         dialog = PlaybackSettingsDialog(
             self.page_time,
             self.preload_spreads,
             self,
         )
 
-        if dialog.exec() != QDialog.Accepted:
+        if (
+            dialog.exec()
+            == QDialog.Accepted
+        ):
+            self.page_time = (
+                dialog.page_time_spin.value()
+            )
+
+            self.preload_spreads = (
+                dialog.preload_spin.value()
+            )
+
+            self._preload_around_current()
+
+            if self.playing:
+                self.play_timer.stop()
+                self._maybe_start_autoplay_timer()
+
+    def toggle_playback(self):
+        if (
+            self._shutting_down
+            or not self.spreads
+        ):
             return
 
-        self.page_time = (
-            dialog.page_time_spin.value()
+        if self.playing:
+            self._stop_playback()
+            return
+
+        if (
+            self.current_spread
+            >= len(self.spreads) - 1
+        ):
+            self.current_spread = 0
+            self._show_current_spread()
+
+        self.playing = True
+
+        self._update_status()
+        self._maybe_start_autoplay_timer()
+
+    def _maybe_start_autoplay_timer(self):
+        if (
+            not self.playing
+            or self._shutting_down
+            or not self.spreads
+        ):
+            return
+
+        if (
+            self.current_spread
+            >= len(self.spreads) - 1
+        ):
+            self._stop_playback()
+            return
+
+        if not self._current_spread_is_loaded():
+            self._show_current_spread()
+            return
+
+        next_position = (
+            self.current_spread + 1
         )
 
-        self.preload_spreads = (
-            dialog.preload_spin.value()
+        left_index, right_index = (
+            self.spreads[next_position]
         )
 
-        self._update_page_time()
+        next_loaded = True
+
+        if (
+            left_index is not None
+            and not self.cache.has(
+                left_index
+            )
+        ):
+            next_loaded = False
+            self.cache.request(
+                left_index
+            )
+
+        if (
+            right_index is not None
+            and not self.cache.has(
+                right_index
+            )
+        ):
+            next_loaded = False
+            self.cache.request(
+                right_index
+            )
+
+        if not next_loaded:
+            return
+
+        interval_ms = max(
+            1,
+            int(
+                round(
+                    self.page_time
+                    * 1000.0
+                )
+            ),
+        )
+
+        if not self.play_timer.isActive():
+            self.play_timer.start(
+                interval_ms
+            )
+
+    def _advance_autoplay(self):
+        if (
+            not self.playing
+            or self._shutting_down
+        ):
+            self.play_timer.stop()
+            return
+
+        if (
+            self.current_spread
+            >= len(self.spreads) - 1
+        ):
+            self._stop_playback()
+            return
+
+        next_position = (
+            self.current_spread + 1
+        )
+
+        left_index, right_index = (
+            self.spreads[next_position]
+        )
+
+        if left_index is not None:
+            self.cache.request(
+                left_index
+            )
+
+        if right_index is not None:
+            self.cache.request(
+                right_index
+            )
+
+        if (
+            (
+                left_index is not None
+                and not self.cache.has(
+                    left_index
+                )
+            )
+            or
+            (
+                right_index is not None
+                and not self.cache.has(
+                    right_index
+                )
+            )
+        ):
+            self.play_timer.stop()
+            return
+
+        self.current_spread = next_position
+
+        self._show_current_spread()
+
+        self.play_timer.stop()
+        self._maybe_start_autoplay_timer()
+
+    def _image_ready(self, index):
+        if (
+            self._shutting_down
+            or not self.spreads
+        ):
+            return
+
+        left_index, right_index = (
+            self.spreads[
+                self.current_spread
+            ]
+        )
+
+        if (
+            index != left_index
+            and index != right_index
+        ):
+            if self.playing:
+                self._maybe_start_autoplay_timer()
+
+            return
+
+        if not self._current_spread_is_loaded():
+            return
+
+        (
+            left_image,
+            right_image,
+        ) = self._get_current_images()
+
+        self.canvas.set_images(
+            left_image,
+            right_image,
+        )
+
+        if self._initial_fit_pending:
+            self.canvas.fit_pages()
+            self._initial_fit_pending = False
 
         if self.playing:
             self._maybe_start_autoplay_timer()
 
-        self._preload_around_current()
-
-    # ------------------------------------------------------------------
-    # Progress
-    # ------------------------------------------------------------------
-
     def _update_progress(self):
-        if len(self.spreads) <= 1:
-            position = 1.0
+        if not self.spreads:
+            self.progress.set_position(
+                0.0
+            )
+
+        elif len(self.spreads) == 1:
+            self.progress.set_position(
+                1.0
+            )
+
         else:
-            position = (
+            self.progress.set_position(
                 self.current_spread
                 / (len(self.spreads) - 1)
             )
 
-        self.progress_bar.set_position(
-            position
-        )
-
-    # ------------------------------------------------------------------
-    # Status
-    # ------------------------------------------------------------------
-
     def _update_status(self):
-        page = self._visible_page_number()
+        page = self._visible_page()
+
+        if page is None:
+            text = "No pages"
+        else:
+            text = f"Page {page}"
 
         if self.playing:
-            state = "Playing"
+            text += " — Playing"
         else:
-            state = "Paused"
+            text += " — Paused"
 
-        self.status_bar.showMessage(
-            f"Page {page} — {state}"
+        self.status_label.setText(
+            text
         )
 
-    # ------------------------------------------------------------------
-    # Fullscreen
-    # ------------------------------------------------------------------
-
     def _start_fullscreen(self):
+        if self._shutting_down:
+            return
+
         self.showFullScreen()
+
         self._fullscreen = True
 
         self._hide_fullscreen_chrome()
 
-        # Make sure the canvas gets the focus.
         self.canvas.setFocus()
 
     def toggle_fullscreen(self):
-        if self.isFullScreen():
+        if self._shutting_down:
+            return
+
+        if self._fullscreen:
             self._leave_fullscreen()
         else:
             self._enter_fullscreen()
 
     def _enter_fullscreen(self):
-        self.showFullScreen()
         self._fullscreen = True
+
+        self.showFullScreen()
 
         self._hide_fullscreen_chrome()
 
         self.canvas.setFocus()
 
     def _leave_fullscreen(self):
-        # showNormal() alone can restore a tiny window if the application
-        # was originally created with a small/default size.
-        #
-        # Therefore explicitly maximize after leaving fullscreen.
-        self.showNormal()
-        self.showMaximized()
+        self._chrome_timer.stop()
 
         self._fullscreen = False
+
+        self.showNormal()
+        self.showMaximized()
 
         self._show_fullscreen_chrome()
 
         self.canvas.setFocus()
 
     def _hide_fullscreen_chrome(self):
-        if not self.isFullScreen():
+        if (
+            not self._fullscreen
+            or self._shutting_down
+        ):
             return
 
-        self.menu_bar.hide()
-        self.status_bar.hide()
+        self.menuBar().hide()
 
     def _show_fullscreen_chrome(self):
-        self.menu_bar.show()
-        self.status_bar.show()
-
-    def handle_mouse_move(self, position):
-        if not self.isFullScreen():
+        if self._shutting_down:
             return
 
-        # Reveal the chrome when the pointer approaches the top or bottom.
+        self.menuBar().show()
+
+        if self._fullscreen:
+            self._chrome_timer.start()
+
+    def handle_mouse_move(self, position):
+        if (
+            not self._fullscreen
+            or self._shutting_down
+        ):
+            return
+
         y = position.y()
+        h = self.canvas.height()
 
-        top_zone = 50
-        bottom_zone = self.height() - 50
-
-        if y <= top_zone or y >= bottom_zone:
+        if (
+            y <= 50
+            or y >= h - 50
+        ):
             self._show_fullscreen_chrome()
-
-            self._chrome_timer.start(1800)
-
-    # ------------------------------------------------------------------
-    # Window events
-    # ------------------------------------------------------------------
-
-    def mouseMoveEvent(self, event):
-        self.handle_mouse_move(
-            event.position()
-        )
-
-        super().mouseMoveEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
 
-        # Only the first layout should automatically fit the pages.
-        # After that, resizing preserves the user's zoom/pan state.
         if self._initial_fit_pending:
             QTimer.singleShot(
                 0,
@@ -1426,7 +1848,10 @@ class BookViewer(QMainWindow):
             )
 
     def _try_initial_fit(self):
-        if not self._initial_fit_pending:
+        if (
+            self._shutting_down
+            or not self._initial_fit_pending
+        ):
             return
 
         if self._current_spread_is_loaded():
@@ -1437,29 +1862,35 @@ class BookViewer(QMainWindow):
         key = event.key()
         modifiers = event.modifiers()
 
-        # Ctrl + +/- zoom.
+        if key in (
+            Qt.Key_Return,
+            Qt.Key_Enter,
+        ):
+            self.fit_pages()
+            event.accept()
+            return
+
         if (
-            modifiers & Qt.ControlModifier
-            and key in (
+            key in (
                 Qt.Key_Plus,
                 Qt.Key_Equal,
             )
+            and modifiers
+            & Qt.ControlModifier
         ):
             self.canvas.zoom_in()
             event.accept()
             return
 
         if (
-            modifiers & Qt.ControlModifier
-            and key == Qt.Key_Minus
+            key in (
+                Qt.Key_Minus,
+                Qt.Key_Underscore,
+            )
+            and modifiers
+            & Qt.ControlModifier
         ):
             self.canvas.zoom_out()
-            event.accept()
-            return
-
-        # Navigation.
-        if key == Qt.Key_Right:
-            self.next_spread()
             event.accept()
             return
 
@@ -1468,7 +1899,11 @@ class BookViewer(QMainWindow):
             event.accept()
             return
 
-        # Zoom.
+        if key == Qt.Key_Right:
+            self.next_spread()
+            event.accept()
+            return
+
         if key == Qt.Key_Up:
             self.canvas.zoom_in()
             event.accept()
@@ -1479,19 +1914,16 @@ class BookViewer(QMainWindow):
             event.accept()
             return
 
-        # Playback.
         if key == Qt.Key_Space:
             self.toggle_playback()
             event.accept()
             return
 
-        # Fullscreen.
         if key == Qt.Key_F:
             self.toggle_fullscreen()
             event.accept()
             return
 
-        # Quit.
         if key == Qt.Key_Q:
             self.close()
             event.accept()
@@ -1499,41 +1931,80 @@ class BookViewer(QMainWindow):
 
         super().keyPressEvent(event)
 
+    def closeEvent(self, event):
+        if self._shutting_down:
+            event.accept()
+            return
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+        # Mark the entire GUI as shutting down first.
+        self._shutting_down = True
+        self.playing = False
+
+        self.play_timer.stop()
+        self._chrome_timer.stop()
+
+        # Stop GUI-side delivery before workers are stopped.
+        try:
+            self.cache.image_ready.disconnect(
+                self._image_ready
+            )
+        except (
+            RuntimeError,
+            TypeError,
+        ):
+            pass
+
+        # This sets cache.shutting_down, clears queued workers, and waits for
+        # all running workers.  Because cache is parented to this BookViewer,
+        # its QObject cannot be destroyed until after this closeEvent returns.
+        self.cache.shutdown()
+
+        event.accept()
+
 
 def main():
     parser = argparse.ArgumentParser(
         prog=Path(__file__).name,
-        description="Scanned book page viewer",
+        description=(
+            "View scanned book pages "
+            "as facing-page spreads."
+        ),
     )
 
     parser.add_argument(
         "source_dir",
-        help="Directory containing scanned page images",
+        help=(
+            "directory containing "
+            "the scanned page images"
+        ),
+    )
+
+    parser.add_argument(
+        "--pages",
+        metavar="SPEC",
+        help=(
+            'page selection, for example '
+            '"10,20-30"'
+        ),
     )
 
     args = parser.parse_args()
 
     app = QApplication(sys.argv)
 
-    try:
-        window = BookViewer(
-            args.source_dir
-        )
-    except Exception as exc:
-        print(
-            f"Error: {exc}",
-            file=sys.stderr,
-        )
-        return 1
+    app.setApplicationName(
+        Path(__file__).stem
+    )
 
-    window.show()
+    viewer = BookViewer(
+        args.source_dir,
+        page_spec=args.pages,
+    )
 
-    return app.exec()
+    viewer.show()
+
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
