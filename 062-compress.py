@@ -156,12 +156,11 @@ def process_image(args):
             str(img.tag_v2.get(259, "unknown")),
         )
 
-        page_num = get_page_num(f)
-
         #
         # Preserve original disabled logic
         #
         if False:
+            page_num = get_page_num(f)
             if (
                 not color_pages
                 or page_num not in color_pages
