@@ -41,7 +41,6 @@ config = load_config()
 # --- Worker ------------------------------------------------------------------
 def process_image(image_path: Path) -> str:
     filename = image_path.name
-    page_number = int(filename.split(".")[0])  # "001.jpg" -> 1
 
     output_path = dst / filename
 
