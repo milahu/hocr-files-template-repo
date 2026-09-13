@@ -63,7 +63,7 @@ num_workers = psutil.cpu_count(logical=False) or 1
 config = load_config()
 
 scan_format = config.scan_format
-image_format = config.image_format
+image_format = config.compresed_image_format
 color_pages = config.color_pages
 
 if not scan_format:

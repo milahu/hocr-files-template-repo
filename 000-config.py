@@ -107,7 +107,7 @@ pil_image_save_kwargs = dict(
 
 # compressed image format
 # for 062-compress.py
-image_format = "jpg"
+compressed_image_format = "jpg"
 
 
 
