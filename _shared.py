@@ -514,7 +514,9 @@ def parse_page_sequence(
 
     pages = []
 
-    for part in spec.split(","):
+    split_parts_regex = r"[,\s]+"
+
+    for part in re.split(split_parts_regex, spec):
 
         part = part.strip()
 
