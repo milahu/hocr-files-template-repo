@@ -69,26 +69,36 @@ class ImageLoadTask(QRunnable):
             image = image.copy()
 
         cache = self.cache
+
         if cache is not None:
-            cache.image_loaded_from_worker(self.index, image)
+            cache.image_loaded_from_worker(
+                self.index,
+                image,
+            )
 
 
 class ImageCache(QObject):
     image_ready = Signal(int)
 
-    def __init__(self, paths, max_images=60, parent=None):
+    def __init__(
+        self,
+        paths,
+        max_images=60,
+        parent=None,
+    ):
         super().__init__(parent)
 
         self.paths = list(paths)
-        self.max_images = max(1, int(max_images))
+        self.max_images = max(
+            1,
+            int(max_images),
+        )
 
         self.images = OrderedDict()
         self.loading = set()
 
         self.mutex = QMutex()
 
-        # Do not parent the thread pool to the cache.  We explicitly control
-        # its lifetime during shutdown.
         self.thread_pool = QThreadPool()
         self.thread_pool.setMaxThreadCount(2)
 
@@ -96,6 +106,7 @@ class ImageCache(QObject):
 
     def get(self, index):
         locker = QMutexLocker(self.mutex)
+
         try:
             image = self.images.get(index)
 
@@ -103,13 +114,16 @@ class ImageCache(QObject):
                 self.images.move_to_end(index)
 
             return image
+
         finally:
             locker.unlock()
 
     def has(self, index):
         locker = QMutexLocker(self.mutex)
+
         try:
             return index in self.images
+
         finally:
             locker.unlock()
 
@@ -136,20 +150,18 @@ class ImageCache(QObject):
             locker.unlock()
 
         self.thread_pool.start(
-            ImageLoadTask(self, index, path)
+            ImageLoadTask(
+                self,
+                index,
+                path,
+            )
         )
 
-    def image_loaded_from_worker(self, index, image):
-        """
-        Called by a worker thread.
-
-        IMPORTANT:
-        The worker never directly touches any widget.
-
-        During shutdown we also avoid emitting the Qt signal.  This method
-        therefore becomes a no-op as soon as shutdown starts.
-        """
-
+    def image_loaded_from_worker(
+        self,
+        index,
+        image,
+    ):
         should_emit = False
 
         locker = QMutexLocker(self.mutex)
@@ -160,12 +172,20 @@ class ImageCache(QObject):
             if self.shutting_down:
                 return
 
-            if image is not None and not image.isNull():
+            if (
+                image is not None
+                and not image.isNull()
+            ):
                 self.images[index] = image
                 self.images.move_to_end(index)
 
-                while len(self.images) > self.max_images:
-                    self.images.popitem(last=False)
+                while (
+                    len(self.images)
+                    > self.max_images
+                ):
+                    self.images.popitem(
+                        last=False
+                    )
 
                 should_emit = True
 
@@ -175,19 +195,15 @@ class ImageCache(QObject):
         if not should_emit:
             return
 
-        # The ImageCache QObject is deliberately kept alive by BookViewer
-        # until after waitForDone() has returned.
         try:
             self.image_ready.emit(index)
+
         except RuntimeError:
-            # If Qt is already tearing down, silently ignore the late result.
+            # Qt may already be tearing down.
+            # A late worker result is harmless.
             pass
 
     def shutdown(self):
-        """
-        Stop all image loading before the cache QObject can be destroyed.
-        """
-
         locker = QMutexLocker(self.mutex)
 
         try:
@@ -199,10 +215,7 @@ class ImageCache(QObject):
         finally:
             locker.unlock()
 
-        # Prevent queued-but-not-started QRunnables from starting.
         self.thread_pool.clear()
-
-        # Wait for all currently running image decoders.
         self.thread_pool.waitForDone()
 
         locker = QMutexLocker(self.mutex)
@@ -213,7 +226,6 @@ class ImageCache(QObject):
         finally:
             locker.unlock()
 
-        # Release the QThreadPool after all workers have finished.
         self.thread_pool = None
 
 
@@ -226,14 +238,20 @@ class BookProgressBar(QWidget):
         self.position = 0.0
 
         self.setFixedHeight(4)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet("background: white;")
+        self.setCursor(
+            Qt.PointingHandCursor
+        )
+
+        self.setStyleSheet(
+            "background: white;"
+        )
 
     def set_position(self, position):
         self.position = max(
             0.0,
             min(1.0, float(position)),
         )
+
         self.update()
 
     def mousePressEvent(self, event):
@@ -247,7 +265,10 @@ class BookProgressBar(QWidget):
             )
 
             self.clicked.emit(
-                max(0.0, min(1.0, position))
+                max(
+                    0.0,
+                    min(1.0, position),
+                )
             )
 
             event.accept()
@@ -285,7 +306,11 @@ class BookProgressBar(QWidget):
 
 
 class BookCanvas(QWidget):
-    def __init__(self, book_viewer, parent=None):
+    def __init__(
+        self,
+        book_viewer,
+        parent=None,
+    ):
         super().__init__(parent)
 
         self.book_viewer = book_viewer
@@ -294,14 +319,19 @@ class BookCanvas(QWidget):
         self.right_image = None
 
         self.zoom = 1.0
-        self.pan = QPointF(0.0, 0.0)
+        self.pan = QPointF(
+            0.0,
+            0.0,
+        )
 
         self.dragging = False
         self.drag_start = QPointF()
         self.pan_start = QPointF()
 
         self.setMouseTracking(True)
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocusPolicy(
+            Qt.StrongFocus
+        )
 
     def background_color(self):
         if self.book_viewer.is_dark_mode():
@@ -315,73 +345,143 @@ class BookCanvas(QWidget):
             value,
         )
 
-    def set_images(self, left_image, right_image):
+    def set_images(
+        self,
+        left_image,
+        right_image,
+    ):
         self.left_image = left_image
         self.right_image = right_image
         self.update()
 
-    def _combined_size(self):
-        left_w = (
-            self.left_image.width()
-            if self.left_image is not None
-            else 0
+    def _slot_sizes(self):
+        """
+        Return the width/height of the two page slots.
+
+        A missing page gets a placeholder slot whose dimensions are based on
+        the page that exists on the other side.
+
+        Therefore:
+
+            [None | page 1]
+
+        and
+
+            [page 2 | None]
+
+        have exactly the same total width as a normal two-page spread when
+        the corresponding pages have the same dimensions.
+
+        For a normal spread, each slot uses the dimensions of its own page.
+        """
+
+        left_width = 0
+        left_height = 0
+
+        right_width = 0
+        right_height = 0
+
+        if self.left_image is not None:
+            left_width = self.left_image.width()
+            left_height = self.left_image.height()
+
+        if self.right_image is not None:
+            right_width = self.right_image.width()
+            right_height = self.right_image.height()
+
+        # Missing left slot:
+        # use the right page's width as the placeholder width.
+        if (
+            self.left_image is None
+            and self.right_image is not None
+        ):
+            left_width = right_width
+            left_height = right_height
+
+        # Missing right slot:
+        # use the left page's width as the placeholder width.
+        if (
+            self.right_image is None
+            and self.left_image is not None
+        ):
+            right_width = left_width
+            right_height = left_height
+
+        total_width = (
+            left_width
+            + right_width
         )
 
-        left_h = (
-            self.left_image.height()
-            if self.left_image is not None
-            else 0
-        )
-
-        right_w = (
-            self.right_image.width()
-            if self.right_image is not None
-            else 0
-        )
-
-        right_h = (
-            self.right_image.height()
-            if self.right_image is not None
-            else 0
+        total_height = max(
+            left_height,
+            right_height,
         )
 
         return (
-            left_w + right_w,
-            max(left_h, right_h),
+            left_width,
+            left_height,
+            right_width,
+            right_height,
+            total_width,
+            total_height,
         )
 
     def _base_origin(self, zoom):
-        total_w, total_h = self._combined_size()
+        (
+            _left_width,
+            _left_height,
+            _right_width,
+            _right_height,
+            total_width,
+            total_height,
+        ) = self._slot_sizes()
 
         return (
             (
                 self.width()
-                - total_w * zoom
+                - total_width * zoom
             ) / 2.0,
 
             (
                 self.height()
-                - total_h * zoom
+                - total_height * zoom
             ) / 2.0,
         )
 
     def fit_pages(self):
-        total_w, total_h = self._combined_size()
+        (
+            _left_width,
+            _left_height,
+            _right_width,
+            _right_height,
+            total_width,
+            total_height,
+        ) = self._slot_sizes()
 
         if (
-            total_w <= 0
-            or total_h <= 0
+            total_width <= 0
+            or total_height <= 0
             or self.width() <= 0
             or self.height() <= 0
         ):
             return
 
-        scale_x = self.width() / total_w
-        scale_y = self.height() / total_h
+        scale_x = (
+            self.width()
+            / total_width
+        )
+
+        scale_y = (
+            self.height()
+            / total_height
+        )
 
         self.zoom = max(
             0.01,
-            min(scale_x, scale_y),
+            min(
+                scale_x,
+                scale_y,
+            ),
         )
 
         self.pan = QPointF(
@@ -391,7 +491,11 @@ class BookCanvas(QWidget):
 
         self.update()
 
-    def set_zoom(self, zoom, anchor=None):
+    def set_zoom(
+        self,
+        zoom,
+        anchor=None,
+    ):
         if (
             self.left_image is None
             and self.right_image is None
@@ -402,10 +506,15 @@ class BookCanvas(QWidget):
 
         new_zoom = max(
             0.01,
-            min(20.0, float(zoom)),
+            min(
+                20.0,
+                float(zoom),
+            ),
         )
 
-        if abs(new_zoom - old_zoom) < 1e-12:
+        if abs(
+            new_zoom - old_zoom
+        ) < 1e-12:
             return
 
         if anchor is None:
@@ -415,7 +524,9 @@ class BookCanvas(QWidget):
             )
 
         old_base_x, old_base_y = (
-            self._base_origin(old_zoom)
+            self._base_origin(
+                old_zoom
+            )
         )
 
         world_x = (
@@ -433,7 +544,9 @@ class BookCanvas(QWidget):
         self.zoom = new_zoom
 
         new_base_x, new_base_y = (
-            self._base_origin(new_zoom)
+            self._base_origin(
+                new_zoom
+            )
         )
 
         self.pan = QPointF(
@@ -468,6 +581,7 @@ class BookCanvas(QWidget):
             return image
 
         inverted = image.copy()
+
         inverted.invertPixels(
             QImage.InvertRgb
         )
@@ -478,24 +592,34 @@ class BookCanvas(QWidget):
         painter = QPainter(self)
 
         try:
-            painter.fillRect(
-                self.rect(),
-                self.background_color(),
+            background = (
+                self.background_color()
             )
 
-            images = []
+            painter.fillRect(
+                self.rect(),
+                background,
+            )
 
-            if self.left_image is not None:
-                images.append(self.left_image)
-
-            if self.right_image is not None:
-                images.append(self.right_image)
-
-            if not images:
+            if (
+                self.left_image is None
+                and self.right_image is None
+            ):
                 return
 
+            (
+                left_width,
+                left_height,
+                right_width,
+                right_height,
+                total_width,
+                total_height,
+            ) = self._slot_sizes()
+
             base_x, base_y = (
-                self._base_origin(self.zoom)
+                self._base_origin(
+                    self.zoom
+                )
             )
 
             x = (
@@ -513,34 +637,51 @@ class BookCanvas(QWidget):
                 False,
             )
 
-            for source_image in images:
+            # ----------------------------------------------------------
+            # LEFT SLOT
+            # ----------------------------------------------------------
+
+            if self.left_image is not None:
                 image = self._display_image(
-                    source_image
+                    self.left_image
                 )
 
-                draw_w = (
+                draw_width = (
                     image.width()
                     * self.zoom
                 )
 
-                draw_h = (
+                draw_height = (
                     image.height()
                     * self.zoom
                 )
 
-                if abs(self.zoom - 1.0) < 1e-12:
+                # Center the page vertically inside its slot.
+                draw_y = (
+                    y
+                    + (
+                        left_height
+                        * self.zoom
+                        - draw_height
+                    ) / 2.0
+                )
+
+                if abs(
+                    self.zoom - 1.0
+                ) < 1e-12:
                     painter.drawImage(
                         int(round(x)),
-                        int(round(y)),
+                        int(round(draw_y)),
                         image,
                     )
+
                 else:
                     painter.drawImage(
                         QRectF(
                             x,
-                            y,
-                            draw_w,
-                            draw_h,
+                            draw_y,
+                            draw_width,
+                            draw_height,
                         ),
                         image,
                         QRectF(
@@ -551,7 +692,70 @@ class BookCanvas(QWidget):
                         ),
                     )
 
-                x += draw_w
+            # Missing left page is intentionally left as the background
+            # color. This is the placeholder.
+
+            # ----------------------------------------------------------
+            # RIGHT SLOT
+            # ----------------------------------------------------------
+
+            right_x = (
+                x
+                + left_width * self.zoom
+            )
+
+            if self.right_image is not None:
+                image = self._display_image(
+                    self.right_image
+                )
+
+                draw_width = (
+                    image.width()
+                    * self.zoom
+                )
+
+                draw_height = (
+                    image.height()
+                    * self.zoom
+                )
+
+                draw_y = (
+                    y
+                    + (
+                        right_height
+                        * self.zoom
+                        - draw_height
+                    ) / 2.0
+                )
+
+                if abs(
+                    self.zoom - 1.0
+                ) < 1e-12:
+                    painter.drawImage(
+                        int(round(right_x)),
+                        int(round(draw_y)),
+                        image,
+                    )
+
+                else:
+                    painter.drawImage(
+                        QRectF(
+                            right_x,
+                            draw_y,
+                            draw_width,
+                            draw_height,
+                        ),
+                        image,
+                        QRectF(
+                            0,
+                            0,
+                            image.width(),
+                            image.height(),
+                        ),
+                    )
+
+            # Missing right page is intentionally left as the background
+            # color. This is the placeholder.
 
         finally:
             painter.end()
@@ -559,7 +763,11 @@ class BookCanvas(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.dragging = True
-            self.drag_start = event.position()
+
+            self.drag_start = (
+                event.position()
+            )
+
             self.pan_start = QPointF(
                 self.pan
             )
@@ -612,7 +820,10 @@ class BookCanvas(QWidget):
     def wheelEvent(self, event):
         modifiers = event.modifiers()
 
-        if modifiers & Qt.ControlModifier:
+        if (
+            modifiers
+            & Qt.ControlModifier
+        ):
             if event.angleDelta().y() > 0:
                 self.zoom_in(
                     event.position()
@@ -670,8 +881,14 @@ class PlaybackSettingsDialog(QDialog):
             0.05
         )
 
-        self.page_time_spin.setDecimals(2)
-        self.page_time_spin.setSuffix(" s")
+        self.page_time_spin.setDecimals(
+            2
+        )
+
+        self.page_time_spin.setSuffix(
+            " s"
+        )
+
         self.page_time_spin.setValue(
             page_time
         )
@@ -754,17 +971,21 @@ class BookViewer(QMainWindow):
         self._initial_fit_pending = True
 
         self._chrome_timer = QTimer(self)
+
         self._chrome_timer.setSingleShot(
             True
         )
+
         self._chrome_timer.setInterval(
             1800
         )
+
         self._chrome_timer.timeout.connect(
             self._hide_fullscreen_chrome
         )
 
         self.play_timer = QTimer(self)
+
         self.play_timer.timeout.connect(
             self._advance_autoplay
         )
@@ -901,10 +1122,16 @@ class BookViewer(QMainWindow):
                 .colorScheme()
             )
 
-            if scheme == Qt.ColorScheme.Dark:
+            if (
+                scheme
+                == Qt.ColorScheme.Dark
+            ):
                 return True
 
-            if scheme == Qt.ColorScheme.Light:
+            if (
+                scheme
+                == Qt.ColorScheme.Light
+            ):
                 return False
 
         except AttributeError:
@@ -959,7 +1186,9 @@ class BookViewer(QMainWindow):
                 get_page_num(path)
             )
 
-            if 1 <= page <= num_pages:
+            if (
+                1 <= page <= num_pages
+            ):
                 page_to_index[page] = index
 
         if page_spec is None:
@@ -1032,6 +1261,7 @@ class BookViewer(QMainWindow):
                         None,
                     )
                 )
+
             else:
                 spreads.append(
                     (
@@ -1219,13 +1449,17 @@ class BookViewer(QMainWindow):
         )
 
         left_image = (
-            self.cache.get(left_index)
+            self.cache.get(
+                left_index
+            )
             if left_index is not None
             else None
         )
 
         right_image = (
-            self.cache.get(right_index)
+            self.cache.get(
+                right_index
+            )
             if right_index is not None
             else None
         )
@@ -1260,7 +1494,6 @@ class BookViewer(QMainWindow):
 
         self._preload_around_current()
 
-        # Do not clear the old image while loading the new spread.
         if self._current_spread_is_loaded():
             (
                 left_image,
@@ -1295,7 +1528,9 @@ class BookViewer(QMainWindow):
                 center - distance,
                 center + distance,
             ):
-                if 0 <= index < count:
+                if (
+                    0 <= index < count
+                ):
                     (
                         left_index,
                         right_index,
@@ -1317,7 +1552,7 @@ class BookViewer(QMainWindow):
         self._update_status()
 
     def _stop_playback_for_manual_navigation(
-        self
+        self,
     ):
         if self.playing:
             self._stop_playback()
@@ -1404,6 +1639,7 @@ class BookViewer(QMainWindow):
 
         try:
             page = int(text)
+
         except ValueError:
             self._update_page_edit()
             return
@@ -1451,7 +1687,8 @@ class BookViewer(QMainWindow):
 
                 if (
                     closest_distance is None
-                    or distance < closest_distance
+                    or distance
+                    < closest_distance
                 ):
                     closest_distance = distance
                     closest_target = position
@@ -1480,11 +1717,15 @@ class BookViewer(QMainWindow):
 
         if len(self.spreads) == 1:
             self.current_spread = 0
+
         else:
             self.current_spread = int(
                 round(
                     position
-                    * (len(self.spreads) - 1)
+                    * (
+                        len(self.spreads)
+                        - 1
+                    )
                 )
             )
 
@@ -1583,7 +1824,9 @@ class BookViewer(QMainWindow):
         )
 
         left_index, right_index = (
-            self.spreads[next_position]
+            self.spreads[
+                next_position
+            ]
         )
 
         next_loaded = True
@@ -1648,7 +1891,9 @@ class BookViewer(QMainWindow):
         )
 
         left_index, right_index = (
-            self.spreads[next_position]
+            self.spreads[
+                next_position
+            ]
         )
 
         if left_index is not None:
@@ -1679,7 +1924,9 @@ class BookViewer(QMainWindow):
             self.play_timer.stop()
             return
 
-        self.current_spread = next_position
+        self.current_spread = (
+            next_position
+        )
 
         self._show_current_spread()
 
@@ -1742,7 +1989,9 @@ class BookViewer(QMainWindow):
         else:
             self.progress.set_position(
                 self.current_spread
-                / (len(self.spreads) - 1)
+                / (
+                    len(self.spreads) - 1
+                )
             )
 
     def _update_status(self):
@@ -1871,7 +2120,8 @@ class BookViewer(QMainWindow):
             return
 
         if (
-            key in (
+            key
+            in (
                 Qt.Key_Plus,
                 Qt.Key_Equal,
             )
@@ -1883,7 +2133,8 @@ class BookViewer(QMainWindow):
             return
 
         if (
-            key in (
+            key
+            in (
                 Qt.Key_Minus,
                 Qt.Key_Underscore,
             )
@@ -1936,27 +2187,23 @@ class BookViewer(QMainWindow):
             event.accept()
             return
 
-        # Mark the entire GUI as shutting down first.
         self._shutting_down = True
         self.playing = False
 
         self.play_timer.stop()
         self._chrome_timer.stop()
 
-        # Stop GUI-side delivery before workers are stopped.
         try:
             self.cache.image_ready.disconnect(
                 self._image_ready
             )
+
         except (
             RuntimeError,
             TypeError,
         ):
             pass
 
-        # This sets cache.shutting_down, clears queued workers, and waits for
-        # all running workers.  Because cache is parented to this BookViewer,
-        # its QObject cannot be destroyed until after this closeEvent returns.
         self.cache.shutdown()
 
         event.accept()
