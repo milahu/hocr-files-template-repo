@@ -8,7 +8,33 @@ import types
 
 config_path = Path("000-config.py")
 
-def load_config(config_path=config_path):
+new_config_path = Path("000-config.py")
+
+# old config paths
+old_config_path_030_txt = Path("030-measure-page-size.txt")
+old_config_path_050_py = Path("050-measure-crop-size.py")
+old_config_path_050_txt = Path("050-measure-crop-size.txt")
+
+debug_load_config = False
+
+def load_config(config_path=config_path, base_config=None):
+
+    if debug_load_config:
+        print(f"loading config: {config_path}")
+
+    if config_path == new_config_path and not config_path.exists():
+        # load old config files
+        config = None
+        if old_config_path_030_txt.exists():
+            config = load_bash_config(old_config_path_030_txt, base_config=config)
+        if old_config_path_050_py.exists():
+            config = load_config(old_config_path_050_py, base_config=config)
+        elif old_config_path_050_txt.exists():
+            config = load_bash_config(old_config_path_050_txt, base_config=config)
+        if config:
+            return config
+        # else: no old config was loaded
+
     spec = importlib.util.spec_from_file_location("config", config_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Failed to load {config_path}")
@@ -28,6 +54,19 @@ def load_config(config_path=config_path):
         }
     )
 
+    if base_config:
+        # merge configs
+        for key in dir(config):
+            if key[0] == "_": continue
+            val = getattr(config, key)
+            if debug_load_config:
+                if hasattr(base_config, key) and getattr(base_config, key) != val:
+                    print(f"replacing config: {key}={val!r}")
+                else:
+                    print(f"merging config: {key}={val!r}")
+            setattr(base_config, key, val)
+        config = base_config
+
     # allow appending some pages
     # without having to rename all files
     config.max_num_pages = int(max(
@@ -37,7 +76,41 @@ def load_config(config_path=config_path):
 
     config.page_num_width = len(str(config.max_num_pages))
 
+    def hasattrs(obj, attrs):
+        "does the object have all attributes?"
+        for attr in attrs:
+            if not hasattr(obj, attr):
+                return False
+        return True
+
+    if not hasattr(config, "scan_top_edge"):
+        if hasattrs(config, ("do_rotate", "rotate_odd", "rotate_even")):
+            # infer scan_top_edge for backward-compatibility with old configs
+            if config.do_rotate == True:
+                if (config.rotate_odd, config.rotate_even) == (270, 90):
+                    config.scan_top_edge = "inside"
+                elif (config.rotate_odd, config.rotate_even) == (180, 180):
+                    config.scan_top_edge = "bottom"
+            elif config.do_rotate == False:
+                config.scan_top_edge = "top"
+
     assert config.scan_top_edge in ("inside", "top", "bottom"), f"config.scan_top_edge={config.scan_top_edge!r}"
+
+    if not hasattrs(config, ("page_width_mm", "page_height_mm")):
+        if hasattrs(config, ("scan_x", "scan_y")):
+            # infer (page_width_mm, page_height_mm) for backward-compatibility with old configs
+            if config.scan_top_edge == "inside":
+                # rotate by 90 degrees
+                config.page_width_mm = config.scan_y
+                config.page_height_mm = config.scan_x
+            else:
+                # rotate by 0 or 180 degrees
+                config.page_width_mm = config.scan_x
+                config.page_height_mm = config.scan_y
+
+    if not hasattr(config, "unbinded_page_width_mm"):
+        # assume that a width of 5 mm was removed by unbinding the book
+        config.unbinded_page_width_mm = config.page_width_mm - 5
 
     # Scanner geometry:
     # X is parallel to the scan top edge.
@@ -69,6 +142,11 @@ def load_config(config_path=config_path):
     # config.margined_scan_width_mm
     # config.margined_scan_height_mm
 
+    if not hasattrs(config, ("max_scan_width_mm", "max_scan_height_mm")):
+        # infer scanner limits from my DIN A4 document scanner: Brother ADS-2400N
+        config.max_scan_width_mm = 215.88
+        config.max_scan_height_mm = 355.567
+
     if config.scan_width_mm > config.max_scan_width_mm:
         raise ValueError(
             f"scan_top_edge requires a scan width of {config.scan_width_mm} mm,"
@@ -79,6 +157,9 @@ def load_config(config_path=config_path):
             f"scan_top_edge requires a scan height of {config.scan_height_mm} mm,"
             f" but the scanner supports only {config.max_scan_height_mm} mm"
         )
+
+    if not hasattr(config, "outside_edge_detection_min_margin_mm"):
+        config.outside_edge_detection_min_margin_mm = 2.0
 
     # TODO? remove in favor of config.edge_deskew_mode
     config.use_three_edge_deskew = config.scan_top_edge == "inside"
@@ -156,6 +237,9 @@ def load_config(config_path=config_path):
 
     config.rotated_scan_aspect = config.rotated_scan_x / config.rotated_scan_y
 
+    if not hasattr(config, "scan_margin"):
+        config.scan_margin = 10
+
     config.margined_scan_width_mm = min(
         config.scan_width_mm + config.scan_margin,
         config.max_scan_width_mm
@@ -188,6 +272,9 @@ def load_config(config_path=config_path):
         config.images_lowthresh = config.lowthresh
     if hasattr(config, "images_lowthresh") and not hasattr(config, "images_highthresh"):
         config.images_highthresh = 1 - config.images_lowthresh
+
+    if not hasattr(config, "color_pages"):
+        config.color_pages = []
 
     if not hasattr(config, "image_pages"):
         # infer image_pages from color_pages
@@ -514,9 +601,7 @@ def parse_page_sequence(
 
     pages = []
 
-    split_parts_regex = r"[,\s]+"
-
-    for part in re.split(split_parts_regex, spec):
+    for part in spec.split(","):
 
         part = part.strip()
 
@@ -722,3 +807,121 @@ def filename_of_page(page_num, config, extension=None) -> str:
     if extension is None:
         extension = f".{config.scan_format}"
     return f"{page_num:0{config.page_num_width}d}{extension}"
+
+
+
+# parse old bash configs
+# 030-measure-page-size.txt
+# 050-measure-crop-size.txt
+
+import ast
+import operator
+import re
+from types import SimpleNamespace
+
+def load_bash_config(config_path, base_config=None):
+
+    if debug_load_config:
+        print(f"loading bash config: {config_path}")
+
+    _ARITHMETIC = re.compile(r"^\$\(\((.*?)\)\)$")
+
+    _OPERATORS = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.FloorDiv: operator.floordiv,
+        ast.Mod: operator.mod,
+    }
+
+
+    def eval_arithmetic(expr, config):
+        tree = ast.parse(expr, mode="eval")
+
+        def evaluate(node):
+            if isinstance(node, ast.Expression):
+                return evaluate(node.body)
+
+            if isinstance(node, ast.Constant) and isinstance(node.value, int):
+                return node.value
+
+            if isinstance(node, ast.Name):
+                try:
+                    return getattr(config, node.id)
+                except AttributeError:
+                    raise ValueError(f"Unknown variable: {node.id}")
+
+            if isinstance(node, ast.BinOp) and type(node.op) in _OPERATORS:
+                return _OPERATORS[type(node.op)](
+                    evaluate(node.left),
+                    evaluate(node.right),
+                )
+
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+                return -evaluate(node.operand)
+
+            raise ValueError(f"Unsupported expression: {ast.dump(node)}")
+
+        return evaluate(tree)
+
+
+    def parse_value(value, config):
+        value = value.strip()
+
+        # Quoted string
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            return value[1:-1]
+
+        if len(value) >= 2 and value[0] == value[-1] == "'":
+            return value[1:-1]
+
+        # Bash arithmetic expression: $((...))
+        match = _ARITHMETIC.fullmatch(value)
+        if match:
+            return eval_arithmetic(match.group(1), config)
+
+        # Integer
+        if re.fullmatch(r"-?\d+", value):
+            return int(value)
+
+        # Plain string
+        return value
+
+    config = SimpleNamespace()
+
+    with open(config_path, encoding="utf-8") as f:
+        for lineno, line in enumerate(f, 1):
+            line = line.strip()
+
+            if not line or line.startswith("#"):
+                continue
+
+            match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", line)
+            if not match:
+                raise ValueError(
+                    f"{config_path}:{lineno}: invalid line: {line!r}"
+                )
+
+            name, value = match.groups()
+            setattr(config, name, parse_value(value, config))
+
+    if debug_load_config:
+        for key in dir(config):
+            if key[0] == "_": continue
+            val = getattr(config, key)
+            print(f"{old_config_path_030_txt}: {key}={val!r}")
+
+    if base_config:
+        # merge configs
+        for key in dir(config):
+            if key[0] == "_": continue
+            val = getattr(config, key)
+            if debug_load_config:
+                if hasattr(base_config, key) and getattr(base_config, key) != val:
+                    print(f"replacing config: {key}={val!r}")
+                else:
+                    print(f"merging config: {key}={val!r}")
+            setattr(base_config, key, val)
+        config = base_config
+
+    return config
