@@ -175,8 +175,6 @@ image_viewer = "feh"
 
 fill_white_pages_lightness_file = "0683-lightness.txt"
 
-# 099.999270 325.tiff # white
-# 099.792250 001.tiff # non-white
 fill_white_pages_white_lightness_threshold = 99.99 / 100 # 99.99%
 
 
