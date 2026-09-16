@@ -638,6 +638,122 @@ def reject_outliers_vertical(pts, tolerance=40):
     return pts[np.abs(xs - median) < tolerance]
 
 
+def fit_line_ransac_or_none(
+        pts,
+        iterations=RANSAC_ITER,
+        inlier_dist=RANSAC_INLIER_DIST,
+        min_inliers=RANSAC_MIN_INLIERS,
+    ):
+    """
+    Fit a line if enough edge points were detected.
+
+    Unlike fit_line_ransac(), this returns None when the edge is
+    genuinely missing. A missing edge is expected for scans where
+    the scanner has cropped one page edge.
+    """
+    pts = np.asarray(pts, dtype=np.float32)
+
+    if len(pts) < 2:
+        return None
+
+    try:
+        return fit_line_ransac(
+            pts,
+            iterations=iterations,
+            inlier_dist=inlier_dist,
+            min_inliers=min_inliers,
+        )[:4]
+    except (ValueError, cv2.error):
+        return None
+
+
+def horizontal_line_from_image_boundary(
+        reference_line,
+        boundary_y,
+    ):
+    """
+    Create a horizontal-page edge at the image boundary.
+
+    The missing edge is represented by a line parallel to the detected
+    horizontal page edge, but passing through y=boundary_y.
+
+    This is mainly useful for diagnostics / geometry. For the actual
+    perspective transform we keep the missing edge at the image boundary.
+    """
+    vx, vy, x0, y0 = map(float, reference_line)
+
+    # Keep the same direction as the detected edge.
+    # We only need a point on the boundary plus the same direction.
+    return (
+        vx,
+        vy,
+        0.0,
+        float(boundary_y),
+    )
+
+
+def make_boundary_line(boundary_y, reference_line):
+    """
+    Return a line parallel to reference_line passing through the
+    horizontal image boundary y=boundary_y.
+
+    This is used when one of top/bottom is missing.
+    """
+    vx, vy, _, _ = map(float, reference_line)
+
+    # A horizontal edge should have vx != 0.
+    # Choose x=0 as the point on the line.
+    if abs(vx) < 1e-12:
+        raise ValueError("Cannot construct horizontal boundary line")
+
+    return (
+        vx,
+        vy,
+        0.0,
+        float(boundary_y),
+    )
+
+
+def line_y_at_x(line, x):
+    """
+    Return y coordinate of a line at x.
+    """
+    vx, vy, x0, y0 = map(float, line)
+
+    if abs(vx) < 1e-12:
+        raise ValueError("Vertical line has no unique y(x)")
+
+    return y0 + ((x - x0) / vx) * vy
+
+
+def line_angle_deg(line):
+    vx, vy, _, _ = line
+    return math.degrees(math.atan2(vy, vx))
+
+
+def intersect_line_with_horizontal_boundary(line, y):
+    """
+    Intersect a parametric line
+
+        (x0, y0) + t * (vx, vy)
+
+    with the horizontal line
+
+        y = constant
+
+    Returns (x, y).
+    """
+    vx, vy, x0, y0 = map(float, line)
+
+    if abs(vy) < 1e-12:
+        raise ValueError("Line is parallel to horizontal boundary")
+
+    t = (y - y0) / vy
+    x = x0 + t * vx
+
+    return np.array([x, y], dtype=np.float32)
+
+
 # TODO dedent
 # these were part of "def process_image"
 if 1:
@@ -1050,12 +1166,56 @@ def process_image(in_path, out_path):
 
 
     # 5. fit lines
+    #
+    # Normally we have three visible page edges:
+    #
+    #     top
+    #     bottom
+    #     outside
+    #
+    # However, when the page is almost as large as the scanner's maximum
+    # scan width, the scanner can crop one of top/bottom completely.
+    #
+    # In that case a missing horizontal edge is NOT an error.
+    # We can still deskew using:
+    #
+    #     outside + top
+    #
+    # or:
+    #
+    #     outside + bottom
+    #
+    # The missing edge is then represented by the corresponding image
+    # boundary later in the perspective transform.
 
-    # Step 5: RANSAC
+    top_line = fit_line_ransac_or_none(top_pts)
+    bottom_line = fit_line_ransac_or_none(bottom_pts)
+    outside_line = fit_line_ransac_or_none(outside_pts)
 
-    top_line = fit_line_ransac(top_pts)[:4]
-    bottom_line = fit_line_ransac(bottom_pts)[:4]
-    outside_line = fit_line_ransac(outside_pts)[:4]
+    if outside_line is None:
+        raise ValueError(
+            f"Could not detect outside page edge "
+            f"(page {page_num})"
+        )
+
+    if top_line is None and bottom_line is None:
+        raise ValueError(
+            f"Could not detect either top or bottom page edge "
+            f"(page {page_num}); need at least one horizontal edge"
+        )
+
+    if DEBUG:
+        print(
+            f"page {page_num}: detected edges:",
+            f"top={'yes' if top_line is not None else 'NO'}",
+            f"bottom={'yes' if bottom_line is not None else 'NO'}",
+            f"outside={'yes' if outside_line is not None else 'NO'}",
+        )
+
+    missing_top = top_line is None
+    missing_bottom = bottom_line is None
+
+
 
     if 0:
         # debug
@@ -1067,14 +1227,36 @@ def process_image(in_path, out_path):
 
 
     # page margin
-    outside_top = intersect_lines(
-        outside_line,
-        top_line
-    )
-    outside_bottom = intersect_lines(
-        outside_line,
-        bottom_line
-    )
+    # Intersections with the detected horizontal edges.
+    #
+    # If one edge is missing, we use the corresponding image boundary
+    # as the page edge. This is intentional: the scanner has already
+    # cropped that edge, so extrapolating the page would manufacture
+    # pixels that do not exist.
+
+    if top_line is not None:
+        outside_top = intersect_lines(
+            outside_line,
+            top_line,
+        )
+    else:
+        outside_top = intersect_line_with_horizontal_boundary(
+            outside_line,
+            0.0,
+        )
+
+    if bottom_line is not None:
+        outside_bottom = intersect_lines(
+            outside_line,
+            bottom_line,
+        )
+    else:
+        outside_bottom = intersect_line_with_horizontal_boundary(
+            outside_line,
+            float(H_img - 1),
+        )
+
+
 
     # also calculate inside_top and inside_bottom
     # inside_line is simply the inside edge of the source image
@@ -1089,14 +1271,30 @@ def process_image(in_path, out_path):
         # Even page:
         # binding/inside edge is the RIGHT image boundary
         inside_x = float(W_img - 1)
-    inside_top = intersect_line_with_vertical_boundary(
-        top_line,
-        inside_x
-    )
-    inside_bottom = intersect_line_with_vertical_boundary(
-        bottom_line,
-        inside_x
-    )
+
+    if top_line is not None:
+        inside_top = intersect_line_with_vertical_boundary(
+            top_line,
+            inside_x,
+        )
+    else:
+        # Missing top page edge: preserve the top image boundary.
+        inside_top = np.array(
+            [inside_x, 0.0],
+            dtype=np.float32,
+        )
+
+    if bottom_line is not None:
+        inside_bottom = intersect_line_with_vertical_boundary(
+            bottom_line,
+            inside_x,
+        )
+    else:
+        # Missing bottom page edge: preserve the bottom image boundary.
+        inside_bottom = np.array(
+            [inside_x, float(H_img - 1)],
+            dtype=np.float32,
+        )
 
 
 
@@ -1262,21 +1460,36 @@ def process_image(in_path, out_path):
         # bottom_angle = math.degrees(line_angle(bottom_line))
         # outside_angle = math.degrees(line_angle(outside_line))
 
-        # new
-        top_angle = horizontal_line_angle(top_line)
-        bottom_angle = horizontal_line_angle(bottom_line)
-        outside_angle = vertical_line_angle(outside_line)
-
         if DEBUG:
             # start debug prints
             print()
             print(f"line 570: page_num={page_num}")
 
-        rotation_error = np.mean([
-            top_angle,
-            bottom_angle,
-            outside_angle - 90,
-        ])
+        top_angle = (
+            horizontal_line_angle(top_line)
+            if top_line is not None
+            else None
+        )
+
+        bottom_angle = (
+            horizontal_line_angle(bottom_line)
+            if bottom_line is not None
+            else None
+        )
+
+        outside_angle = vertical_line_angle(outside_line)
+
+        rotation_errors = [
+            outside_angle - 90.0,
+        ]
+
+        if top_angle is not None:
+            rotation_errors.append(top_angle)
+
+        if bottom_angle is not None:
+            rotation_errors.append(bottom_angle)
+
+        rotation_error = float(np.mean(rotation_errors))
 
         Mrot = cv2.getRotationMatrix2D(
             (W_img/2, H_img/2),
@@ -1355,6 +1568,36 @@ def process_image(in_path, out_path):
             # inside edge is the RIGHT edge
             inside_top[0] = Wr - 1
             inside_bottom[0] = Wr - 1
+
+        # don't use the missing edge as though it were detected after rotation
+        # (inside_top, outside_top, outside_bottom, inside_bottom)
+        # contain image-boundary points when an edge is missing.
+        # but the perspective transform should distinguish the two cases
+        if missing_top:
+            # The top edge was cropped by the scanner.
+            #
+            # Preserve the rotated image's top boundary instead of trying
+            # to invent the missing page edge.
+            inside_top = np.array(
+                [inside_top[0], 0.0],
+                dtype=np.float32,
+            )
+            outside_top = np.array(
+                [outside_top[0], 0.0],
+                dtype=np.float32,
+            )
+        if missing_bottom:
+            # The bottom edge was cropped by the scanner.
+            #
+            # Preserve the rotated image's bottom boundary.
+            inside_bottom = np.array(
+                [inside_bottom[0], float(Hr - 1)],
+                dtype=np.float32,
+            )
+            outside_bottom = np.array(
+                [outside_bottom[0], float(Hr - 1)],
+                dtype=np.float32,
+            )
 
         top_width = np.linalg.norm(
             outside_top - inside_top
@@ -1456,6 +1699,26 @@ def process_image(in_path, out_path):
                 # Remove everything from outmost_inside_x through the right edge.
                 crop_x = int(math.floor(outmost_inside_x))
                 rotated = rotated[:, :crop_x, :]
+
+
+
+        if DEBUG:
+            print(
+                f"page {page_num}: geometry mode = "
+                f"{'3-edge' if not (missing_top or missing_bottom) else '2-edge'}"
+            )
+
+            if missing_top:
+                print(
+                    f"page {page_num}: top edge missing; "
+                    f"preserving image top boundary"
+                )
+
+            if missing_bottom:
+                print(
+                    f"page {page_num}: bottom edge missing; "
+                    f"preserving image bottom boundary"
+                )
 
 
 
@@ -1865,6 +2128,7 @@ def main():
                 try:
                     future.result()
                 except Exception as exc:
+                    print() # end line of tqdm progress bar
                     print(f"Error processing {fname}: {exc}")
                     raise
                 finally:
