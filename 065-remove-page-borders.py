@@ -128,31 +128,32 @@ def contour_to_pts(contour):
 
 def fit_line_ransac(pts, iterations=RANSAC_ITER, inlier_dist=RANSAC_INLIER_DIST, min_inliers=RANSAC_MIN_INLIERS):
     if len(pts) < 2:
-        raise ValueError("Not enough points")
+        raise ValueError("Not enough points for line fit")
     best_inliers = None
+    best_cnt = 0
     best_model = None
-    n = len(pts)
     ptsf = pts.astype(np.float32)
+    n = len(ptsf)
     for _ in range(iterations):
         i1, i2 = random.sample(range(n), 2)
         p1 = ptsf[i1]; p2 = ptsf[i2]
         vx = float(p2[0] - p1[0]); vy = float(p2[1] - p1[1])
-        if vx == 0 and vy == 0:
+        if abs(vx) < 1e-6 and abs(vy) < 1e-6:
             continue
         dists = np.abs(vy*(ptsf[:,0]-p1[0]) - vx*(ptsf[:,1]-p1[1])) / (math.hypot(vx, vy) + 1e-12)
         inliers = dists <= inlier_dist
         cnt = int(inliers.sum())
-        if cnt >= min_inliers and (best_inliers is None or cnt > int(best_inliers.sum())):
+        if cnt >= min_inliers and cnt > best_cnt:
+            best_cnt = cnt
             best_inliers = inliers.copy()
             best_model = (vx, vy, float(p1[0]), float(p1[1]))
     if best_model is None:
         vx, vy, x0, y0 = cv2.fitLine(ptsf, cv2.DIST_L2, 0, 0.01, 0.01).flatten()
-        inlier_mask = np.ones(len(pts), dtype=bool)
+        inlier_mask = np.ones(len(ptsf), dtype=bool)
         return float(vx), float(vy), float(x0), float(y0), inlier_mask
     inlier_pts = ptsf[best_inliers]
     vx, vy, x0, y0 = cv2.fitLine(inlier_pts, cv2.DIST_L2, 0, 0.01, 0.01).flatten()
-    inlier_mask = best_inliers
-    return float(vx), float(vy), float(x0), float(y0), inlier_mask
+    return float(vx), float(vy), float(x0), float(y0), best_inliers
 
 def intersect_lines(l1, l2):
     vx1, vy1, x1, y1 = l1
@@ -752,94 +753,6 @@ def intersect_line_with_horizontal_boundary(line, y):
     x = x0 + t * vx
 
     return np.array([x, y], dtype=np.float32)
-
-
-# TODO dedent
-# these were part of "def process_image"
-if 1:
-    # ---------- small helpers ----------
-    def ensure_dir(p):
-        os.makedirs(p, exist_ok=True)
-
-    def save_dbg(img, path):
-        ensure_dir(path.parent)
-        save_image(path, img)
-
-    def percentile_threshold(gray):
-        high_p = np.percentile(gray, THRESH_HIGH_PERCENTILE)
-        thr = max(THRESH_MIN, int(high_p * 0.95))
-        _, mask = cv2.threshold(gray, thr, 255, cv2.THRESH_BINARY)
-        return mask, thr, int(high_p)
-
-    def keep_largest_component(mask):
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-        if num_labels <= 1:
-            return mask
-        areas = stats[1:, cv2.CC_STAT_AREA]
-        best = 1 + int(np.argmax(areas))
-        out = np.zeros_like(mask)
-        out[labels == best] = 255
-        return out
-
-    def detect_vertical_streaks(mask, approx_width=3, length_thresh_ratio=0.15):
-        h, w = mask.shape
-        kx = approx_width
-        ky = max(15, int(h * 0.02))
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kx, ky))
-        long_vertical = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(long_vertical, connectivity=8)
-        streak_mask = np.zeros_like(mask)
-        length_thresh = max(10, int(h * length_thresh_ratio))
-        for i in range(1, num_labels):
-            x, y, ww, hh, area = stats[i]
-            if hh >= length_thresh and ww <= max(5, int(w * 0.01)):
-                streak_mask[labels == i] = 255
-        return streak_mask
-
-    def contour_to_pts(c):
-        return c.reshape(-1, 2)
-
-    def fit_line_ransac(pts, iterations=RANSAC_ITER, inlier_dist=RANSAC_INLIER_DIST, min_inliers=RANSAC_MIN_INLIERS):
-        if len(pts) < 2:
-            raise ValueError("Not enough points for line fit")
-        best_inliers = None
-        best_cnt = 0
-        best_model = None
-        ptsf = pts.astype(np.float32)
-        n = len(ptsf)
-        for _ in range(iterations):
-            i1, i2 = random.sample(range(n), 2)
-            p1 = ptsf[i1]; p2 = ptsf[i2]
-            vx = float(p2[0] - p1[0]); vy = float(p2[1] - p1[1])
-            if abs(vx) < 1e-6 and abs(vy) < 1e-6:
-                continue
-            dists = np.abs(vy*(ptsf[:,0]-p1[0]) - vx*(ptsf[:,1]-p1[1])) / (math.hypot(vx, vy) + 1e-12)
-            inliers = dists <= inlier_dist
-            cnt = int(inliers.sum())
-            if cnt >= min_inliers and cnt > best_cnt:
-                best_cnt = cnt
-                best_inliers = inliers.copy()
-                best_model = (vx, vy, float(p1[0]), float(p1[1]))
-        if best_model is None:
-            vx, vy, x0, y0 = cv2.fitLine(ptsf, cv2.DIST_L2, 0, 0.01, 0.01).flatten()
-            inlier_mask = np.ones(len(ptsf), dtype=bool)
-            return float(vx), float(vy), float(x0), float(y0), inlier_mask
-        inlier_pts = ptsf[best_inliers]
-        vx, vy, x0, y0 = cv2.fitLine(inlier_pts, cv2.DIST_L2, 0, 0.01, 0.01).flatten()
-        return float(vx), float(vy), float(x0), float(y0), best_inliers
-
-    def intersect_lines(l1, l2):
-        vx1, vy1, x1, y1 = l1
-        vx2, vy2, x2, y2 = l2
-        A = np.array([[vx1, -vx2], [vy1, -vy2]], dtype=np.float32)
-        b = np.array([x2 - x1, y2 - y1], dtype=np.float32)
-        det = np.linalg.det(A)
-        if abs(det) < 1e-8:
-            return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
-        t1, t2 = np.linalg.solve(A, b)
-        xi = x1 + t1 * vx1
-        yi = y1 + t1 * vy1
-        return float(xi), float(yi)
 
 
 def transform_points_affine(points, M):
