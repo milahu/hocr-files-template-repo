@@ -32,6 +32,15 @@ unbinded_page_width_front_bottom_mm = unbinded_page_width_mm + 0
 unbinded_page_width_back_top_mm = unbinded_page_width_mm + 0
 unbinded_page_width_back_bottom_mm = unbinded_page_width_mm + 0
 
+# physical size of the text block
+# this is useful to restore the physical aspect ratio in 0662-restore-page-size.py
+# NOTE the bottom of the text block is the baseline of the last line
+# (not the descender line of the last line)
+# NOTE the top of the text block is the ascender line of the first line
+# (not the mean line of the first line)
+text_block_width_mm = 0
+text_block_height_mm = 0
+
 # which physical page edge is fed first into the document scanner?
 # that edge becomes the scan top edge
 # possible value: "inside" or "top" or "bottom"
