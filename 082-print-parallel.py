@@ -418,7 +418,10 @@ def create_filtered_pdf(
     # Normalize PDF rotation for printing
     # --------------------------------------------------------------
 
-    normalized_pdf = f"{input_pdf}.normalized.pdf"
+    # quickfix: avoid exceeding the maximum filename length of 255 bytes
+    input_pdf_short = input_pdf[:120]
+
+    normalized_pdf = f"{input_pdf_short}.normalized.pdf"
 
     normalized_pdf = normalize_pdf_for_printing(input_pdf, normalized_pdf)
 
@@ -499,8 +502,11 @@ def create_filtered_pdf(
             to_page=page_index,
         )
 
+    # quickfix: avoid exceeding the maximum filename length of 255 bytes
+    input_pdf_short = input_pdf[:120]
+
     output_pdf = (
-        f"{input_pdf}.filtered.pdf"
+        f"{input_pdf_short}.filtered.pdf"
     )
 
     print(
@@ -1806,8 +1812,11 @@ def main():
             "duplex short-edge"
         )
 
+        # quickfix: avoid exceeding the maximum filename length of 255 bytes
+        input_pdf_short = input_pdf[:120]
+
         final_pdf = (
-            f"{input_pdf}.nup2.pdf"
+            f"{input_pdf_short}.nup2.pdf"
         )
 
         create_nup2_pdf(
