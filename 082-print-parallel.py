@@ -2102,6 +2102,7 @@ def main():
                 shlex.join(command)
             )
 
+            # FIXME retry on error
             subprocess.run(
                 command,
                 check=True,
