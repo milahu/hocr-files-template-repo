@@ -1871,48 +1871,119 @@ def process_image(in_path, out_path):
 
     else:
         # config.use_three_edge_deskew == False
+        #
+        # The book is too tall for `scan_top_edge = "inside"`,
+        # so we have to use `scan_top_edge = "top"`,
+        # so the top page edge is missing.
+        # Use only the outside edge and bottom edge.
+        #
+        # `scan_top_edge == "top"` means:
+        # the image top is the missing page edge.
 
-        raise NotImplementedError("sorry, your book is too tall for your scanner...")
+        if config.scan_top_edge != "top":
+            raise NotImplementedError("two-edge deskew currently supports only scan_top_edge='top'")
 
-        # FIXME use only two page edges: outside, bottom
+        if outside_line is None:
+            raise RuntimeError("outside edge not detected")
 
-        # # Approximate contour to quadrilateral
-        # epsilon = 0.02 * cv2.arcLength(page_contour, True)
-        # approx = cv2.approxPolyDP(page_contour, epsilon, True)
-        # if len(approx) != 4:
-        #     approx = cv2.convexHull(page_contour)
-        #     if len(approx) < 4:
-        #         print(f"Warning: not enough points for perspective in {in_path}")
-        #         return
-        #     # pick 4 extreme points
-        #     pts = np.array([
-        #         approx[approx[:,0,0].argmin()][0],  # leftmost
-        #         approx[approx[:,0,1].argmin()][0],  # topmost
-        #         approx[approx[:,0,0].argmax()][0],  # rightmost
-        #         approx[approx[:,0,1].argmax()][0]   # bottommost
-        #     ])
-        # else:
-        #     pts = approx.reshape(4,2)
+        if bottom_line is None:
+            raise RuntimeError("bottom edge not detected; required for two-edge deskew")
 
-        rect = order_points(pts)
+        # Use the two detected edges to estimate rotation.
+        outside_angle = vertical_line_angle(outside_line)
+        bottom_angle = horizontal_line_angle(bottom_line)
 
-        # Perspective transform
-        widthA = np.linalg.norm(rect[2] - rect[3])
-        widthB = np.linalg.norm(rect[1] - rect[0])
-        maxWidth = max(int(widthA), int(widthB))
-        heightA = np.linalg.norm(rect[1] - rect[2])
-        heightB = np.linalg.norm(rect[0] - rect[3])
-        maxHeight = max(int(heightA), int(heightB))
+        rotation_error = float(
+            np.mean([
+                outside_angle - 90.0,
+                bottom_angle,
+            ])
+        )
 
-        dst = np.array([
+        Mrot = cv2.getRotationMatrix2D(
+            (W_img / 2.0, H_img / 2.0),
+            rotation_error,
+            1.0,
+        )
+
+        rotated = cv2.warpAffine(
+            img,
+            Mrot,
+            (W_img, H_img),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(255, 255, 255),
+        )
+
+        # Transform the two useful corners.
+        outside_bottom = intersect_lines(outside_line, bottom_line)
+
+        p = np.array(
+            [outside_bottom[0], outside_bottom[1], 1.0],
+            dtype=np.float64,
+        )
+        outside_bottom_rot = Mrot @ p
+        outside_bottom_rot = outside_bottom_rot[:2]
+
+        # The missing top edge is the top of the rotated scan.
+        inside_x = 0.0 if bad_on_left else float(W_img - 1)
+
+        inside_top = np.array([inside_x, 0.0], dtype=np.float64)
+        outside_top = np.array(
+            [outside_bottom_rot[0], 0.0],
+            dtype=np.float64,
+        )
+        inside_bottom = np.array(
+            [inside_x, outside_bottom_rot[1]],
+            dtype=np.float64,
+        )
+
+        # Page dimensions.
+        expected_w = int(round(
+            abs(outside_bottom_rot[0] - inside_x)
+        ))
+        expected_h = int(round(
+            abs(outside_bottom_rot[1])
+        ))
+
+        if expected_w <= 0 or expected_h <= 0:
+            raise RuntimeError(
+                f"invalid two-edge page size: {expected_w}x{expected_h}"
+            )
+
+        src_corners = np.array([
+            inside_top,
+            outside_top,
+            outside_bottom_rot,
+            inside_bottom,
+        ], dtype=np.float32)
+
+        if not bad_on_left:
+            src_corners = np.array([
+                outside_top,
+                inside_top,
+                inside_bottom,
+                outside_bottom_rot,
+            ], dtype=np.float32)
+
+        dst_corners = np.array([
             [0, 0],
-            [maxWidth - 1, 0],
-            [maxWidth - 1, maxHeight - 1],
-            [0, maxHeight - 1]
-        ], dtype="float32")
+            [expected_w - 1, 0],
+            [expected_w - 1, expected_h - 1],
+            [0, expected_h - 1],
+        ], dtype=np.float32)
 
-        M = cv2.getPerspectiveTransform(rect, dst)
-        warped = cv2.warpPerspective(img, M, (maxWidth, maxHeight))
+        M = cv2.getPerspectiveTransform(src_corners, dst_corners)
+
+        warped = cv2.warpPerspective(
+            rotated,
+            M,
+            (expected_w, expected_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(255, 255, 255),
+        )
+
 
     # # Add internal white border
     # h, w = warped.shape[:2]
