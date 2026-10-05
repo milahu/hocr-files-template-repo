@@ -2042,7 +2042,9 @@ def main():
                     future.result()
                 except Exception as exc:
                     print() # end line of tqdm progress bar
-                    print(f"Error processing {fname}: {exc}")
+                    print(f"Error processing {fname}: {type(exc).__name__}: {exc}")
+                    # kill all other workers to raise the exception immediately
+                    executor.kill_workers()
                     raise
                 finally:
                     pbar.update(1)
