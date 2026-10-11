@@ -56,6 +56,7 @@ PRACTICALLY_WHITE_THRESHOLD = 250  # for uint8 images
 import os
 import re
 import math
+import time
 import random
 import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -134,7 +135,8 @@ def fit_line_ransac(pts, iterations=RANSAC_ITER, inlier_dist=RANSAC_INLIER_DIST,
     best_model = None
     ptsf = pts.astype(np.float32)
     n = len(ptsf)
-    for _ in range(iterations):
+    for iteration_idx in range(iterations):
+        # if DEBUG: print(f"fit_line_ransac: iteration_idx={iteration_idx}")
         i1, i2 = random.sample(range(n), 2)
         p1 = ptsf[i1]; p2 = ptsf[i2]
         vx = float(p2[0] - p1[0]); vy = float(p2[1] - p1[1])
@@ -147,10 +149,13 @@ def fit_line_ransac(pts, iterations=RANSAC_ITER, inlier_dist=RANSAC_INLIER_DIST,
             best_cnt = cnt
             best_inliers = inliers.copy()
             best_model = (vx, vy, float(p1[0]), float(p1[1]))
+            if DEBUG: print(f"fit_line_ransac: iteration_idx={iteration_idx}: updating best_model to {best_model}")
     if best_model is None:
+        if DEBUG: print(f"fit_line_ransac: not found best_model")
         vx, vy, x0, y0 = cv2.fitLine(ptsf, cv2.DIST_L2, 0, 0.01, 0.01).flatten()
         inlier_mask = np.ones(len(ptsf), dtype=bool)
         return float(vx), float(vy), float(x0), float(y0), inlier_mask
+    if DEBUG: print(f"fit_line_ransac: found best_model")
     inlier_pts = ptsf[best_inliers]
     vx, vy, x0, y0 = cv2.fitLine(inlier_pts, cv2.DIST_L2, 0, 0.01, 0.01).flatten()
     return float(vx), float(vy), float(x0), float(y0), best_inliers
@@ -468,51 +473,43 @@ def detect_edge_points(gray, mask, edge, search_size):
     pts = []
 
     if edge == EDGE_TOP:
-        y_max = min(search_size, h)
-        for x in range(w):
-            # TODO why 255
-            ys = np.where(mask[:y_max, x] == 255)[0]
-            if len(ys):
-                pts.append((x, ys[0]))
+        region = mask[:min(search_size, h), :] == 255
+        valid = region.any(axis=0)
+        xs = np.flatnonzero(valid)
+        ys = region.argmax(axis=0)[valid]
+        pts = np.column_stack((xs, ys))
 
     elif edge == EDGE_BOTTOM:
         y_min = max(0, h - search_size)
-        for x in range(w):
-            ys = np.where(mask[y_min:, x] == 255)[0]
-            if len(ys):
-                pts.append((x, y_min + ys[-1]))
+        region = mask[y_min:, :] == 255
+        valid = region.any(axis=0)
+        xs = np.flatnonzero(valid)
+        ys = region.shape[0] - 1 - np.argmax(
+            region[::-1, :], axis=0
+        )[valid]
+        ys += y_min
+        pts = np.column_stack((xs, ys))
 
     elif edge == EDGE_LEFT:
-        x_max = min(search_size, w)
-        for y in range(h):
-            xs = np.where(mask[y, :x_max] == 255)[0]
-            if len(xs):
-                pts.append((xs[0], y))
+        region = mask[:, :min(search_size, w)] == 255
+        valid = region.any(axis=1)
+        ys = np.flatnonzero(valid)
+        xs = region.argmax(axis=1)[valid]
+        pts = np.column_stack((xs, ys))
 
-    # elif edge == EDGE_RIGHT:
-    else:
+    else:  # EDGE_RIGHT
         x_min = max(0, w - search_size)
-        for y in range(h):
-            xs = np.where(mask[y, x_min:] == 255)[0]
-            if len(xs):
-                pts.append((x_min + xs[-1], y))
+        region = mask[:, x_min:] == 255
+        valid = region.any(axis=1)
+        ys = np.flatnonzero(valid)
+        xs = region.shape[1] - 1 - np.argmax(
+            region[:, ::-1], axis=1
+        )[valid]
+        xs += x_min
+        pts = np.column_stack((xs, ys))
 
-    pts = np.asarray(pts, np.float32)
-
-    # Transition verification
-    #
-    # The first white pixel isn't always the page.
-    # It might be dust, glare, or text sticking out.
-    #
-    # Keep only points that actually separate gray background
-    # from the white page.
-    pts = verify_transition(
-        gray,
-        pts,
-        edge,
-    )
-
-    return pts
+    pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
+    return verify_transition(gray, pts, edge)
 
 
 def verify_transition(gray, points, edge):
@@ -552,33 +549,12 @@ def verify_horizontal(gray, points, top_edge):
             outside = np.mean(gray[y:y+3, x])
             inside  = np.mean(gray[y-3:y, x])
 
-        r'''
-        # must have strong contrast
+        # The outside should look like the solid midgray scanner background.
+        if not (80 <= outside <= 180):
+            continue
+
+        # The page may be lighter OR darker than the background.
         if abs(float(inside) - float(outside)) < 40:
-            continue
-        '''
-        r'''
-        # must have strong contrast
-        if top_edge:
-            if not is_horizontal_transition(gray, x, y):
-                continue
-        else:
-            if not is_vertical_transition(gray, x, y):
-                continue
-        '''
-        # background is always gray
-        # Require the outside to actually look like scanner background
-        BACKGROUND_MIN = 80
-        BACKGROUND_MAX = 180
-        if not (BACKGROUND_MIN <= outside <= BACKGROUND_MAX):
-            continue
-
-        # outside should be scanner gray
-        if not (60 < outside < 200):
-            continue
-
-        # inside should be brighter
-        if inside <= outside:
             continue
 
         good.append((x, y))
@@ -603,13 +579,12 @@ def verify_vertical(gray, points, right_edge):
             outside = np.mean(gray[y, x-3:x])
             inside  = np.mean(gray[y, x:x+3])
 
+        # The outside should look like the solid midgray scanner background.
+        if not (80 <= outside <= 180):
+            continue
+
+        # The page may be lighter OR darker than the background.
         if abs(float(inside) - float(outside)) < 40:
-            continue
-
-        if not (60 < outside < 200):
-            continue
-
-        if inside <= outside:
             continue
 
         good.append((x, y))
@@ -906,6 +881,8 @@ def process_image(in_path, out_path):
     """
     # ---------- start ----------
 
+    if DEBUG: print() # end line of tqdm progress bar
+
     # 1. load image
 
     fname = in_path.name
@@ -1036,20 +1013,112 @@ def process_image(in_path, out_path):
     # must have no influence on the deskew step
     # (deskew = Rotation + Perspective transform)
 
-    if bad_on_left:
-        outside_pts = detect_edge_points(
+    # Expected horizontal margin between the page and scan boundary.
+    expected_horizontal_margin_mm = (
+        config.margined_scan_width_mm
+        - config.unbinded_page_width_mm
+    ) / 2.0
+    expected_horizontal_margin_px = int(round(
+        expected_horizontal_margin_mm
+        * W_img
+        / config.margined_scan_width_mm
+    ))
+    # Search up to 2x the expected margin from the relevant image side.
+    vertical_edge_search_size = min(
+        W_img,
+        max(1, 2 * expected_horizontal_margin_px),
+    )
+
+    # if bad_on_left:
+    #     outside_pts = detect_edge_points(
+    #         gray,
+    #         mask,
+    #         EDGE_RIGHT,
+    #         edge_search_width_px,
+    #     )
+    # else:
+    #     outside_pts = detect_edge_points(
+    #         gray,
+    #         mask,
+    #         EDGE_LEFT,
+    #         edge_search_width_px,
+    #     )
+    outside_edge = EDGE_RIGHT if bad_on_left else EDGE_LEFT
+
+    outside_pts = detect_edge_points(
+        gray,
+        mask,
+        outside_edge,
+        vertical_edge_search_size,
+    )
+
+    # inside_pts = None
+    # if (
+    #     not config.use_three_edge_deskew
+    #     and config.scan_top_edge == "top"
+    # ):
+    #     inside_edge = EDGE_LEFT if bad_on_left else EDGE_RIGHT
+    #     if DEBUG: print(f"{in_path}: getting inside_pts with detect_edge_points: edge_search_width_px={edge_search_width_px}")
+    #     inside_pts = detect_edge_points(
+    #         gray,
+    #         mask,
+    #         inside_edge,
+    #         edge_search_width_px,
+    #     )
+    #     if DEBUG: print(f"{in_path}: len(inside_pts) = {len(inside_pts)}")
+    # else:
+    #     if DEBUG: print(f"{in_path}: not getting inside_pts")
+
+    inside_pts = None
+    if (
+        not config.use_three_edge_deskew
+        and config.scan_top_edge == "top"
+    ):
+        inside_edge = EDGE_LEFT if bad_on_left else EDGE_RIGHT
+        if DEBUG:
+            print(
+                f"{in_path}: expected inside margin="
+                f"{expected_horizontal_margin_px}px, "
+                f"search width={vertical_edge_search_size}px"
+            )
+        inside_pts = detect_edge_points(
             gray,
             mask,
-            EDGE_RIGHT,
-            edge_search_width_px,
+            inside_edge,
+            vertical_edge_search_size,
         )
+        if DEBUG: print(f"{in_path}: len(inside_pts) = {len(inside_pts)}")
     else:
-        outside_pts = detect_edge_points(
-            gray,
-            mask,
-            EDGE_LEFT,
-            edge_search_width_px,
-        )
+        if DEBUG: print(f"{in_path}: not getting inside_pts")
+
+
+
+    # The normal detector can fail when the physical page edge is
+    # visually weak, but the page mask still gives us its boundary.
+    if len(outside_pts) < RANSAC_MIN_INLIERS:
+        if DEBUG: print("detect_edge_points failed to detect enough outside_pts -> using fallback")
+        ys, xs = np.nonzero(mask > 0)
+
+        if outside_edge == EDGE_LEFT:
+            x_edge = xs.min() if len(xs) else None
+            if x_edge is not None:
+                fallback_pts = np.column_stack([
+                    np.full(len(ys), x_edge),
+                    ys,
+                ])
+            else:
+                fallback_pts = np.empty((0, 2))
+        else:
+            x_edge = xs.max() if len(xs) else None
+            if x_edge is not None:
+                fallback_pts = np.column_stack([
+                    np.full(len(ys), x_edge),
+                    ys,
+                ])
+            else:
+                fallback_pts = np.empty((0, 2))
+        if len(fallback_pts) >= RANSAC_MIN_INLIERS:
+            outside_pts = fallback_pts
 
     top_pts = detect_edge_points(
         gray,
@@ -1076,7 +1145,19 @@ def process_image(in_path, out_path):
     bottom_pts = reject_outliers_horizontal(bottom_pts)
     outside_pts = reject_outliers_vertical(outside_pts)
 
+    inside_line = None
 
+    if (
+        not config.use_three_edge_deskew
+        and config.scan_top_edge == "top"
+    ):
+        if DEBUG: print(f"{in_path}: getting inside_line with fit_line_ransac_or_none")
+        if DEBUG: print(f"{in_path}: len(inside_pts) before reject_outliers_vertical: {len(inside_pts)}")
+        inside_pts = reject_outliers_vertical(inside_pts)
+        if DEBUG: print(f"{in_path}: len(inside_pts) after reject_outliers_vertical: {len(inside_pts)}")
+        inside_line = fit_line_ransac_or_none(inside_pts)
+    else:
+        if DEBUG: print(f"{in_path}: not getting inside_line")
 
     # 5. fit lines
     #
@@ -1101,14 +1182,40 @@ def process_image(in_path, out_path):
     # The missing edge is then represented by the corresponding image
     # boundary later in the perspective transform.
 
+    if DEBUG: print(f"fit_line_ransac_or_none(top_pts) # len(top_pts) = {len(top_pts)}")
+    if DEBUG: t1 = time.time()
     top_line = fit_line_ransac_or_none(top_pts)
+    if DEBUG: print(f"fit_line_ransac_or_none: done in {time.time() - t1:.3f} seconds")
+
+    if DEBUG: print(f"fit_line_ransac_or_none(bottom_pts) # len(bottom_pts) = {len(bottom_pts)}")
+    if DEBUG: t1 = time.time()
     bottom_line = fit_line_ransac_or_none(bottom_pts)
+    if DEBUG: print(f"fit_line_ransac_or_none: done in {time.time() - t1:.3f} seconds")
+
+    # FIXME this takes too long because we have too many outside_pts
+    # len(inside_pts) = 5277
+    # len(bottom_pts) = 3481
+    # len(outside_pts) = 17742474
+    if DEBUG: print(f"fit_line_ransac_or_none(outside_pts) # len(outside_pts) = {len(outside_pts)}")
+    if DEBUG: t1 = time.time()
     outside_line = fit_line_ransac_or_none(outside_pts)
+    if DEBUG: print(f"fit_line_ransac_or_none: done in {time.time() - t1:.3f} seconds")
+
+    if 0:
+        # make RANSAC less strict
+        if DEBUG: print("fit_line_ransac_or_none(outside_pts) # less strict")
+        outside_line = fit_line_ransac_or_none(
+            outside_pts,
+            iterations=RANSAC_ITER,
+            inlier_dist=RANSAC_INLIER_DIST * 2,
+            min_inliers=10,
+        )
 
     if outside_line is None:
         raise ValueError(
             f"Could not detect outside page edge "
-            f"(page {page_num})"
+            f"(page {page_num}); "
+            f"detected {len(outside_pts)} candidate points"
         )
 
     if top_line is None and bottom_line is None:
@@ -1123,6 +1230,7 @@ def process_image(in_path, out_path):
             f"top={'yes' if top_line is not None else 'NO'}",
             f"bottom={'yes' if bottom_line is not None else 'NO'}",
             f"outside={'yes' if outside_line is not None else 'NO'}",
+            f"inside={'yes' if inside_line is not None else 'NO'}",
         )
 
     missing_top = top_line is None
@@ -1148,22 +1256,26 @@ def process_image(in_path, out_path):
     # pixels that do not exist.
 
     if top_line is not None:
+        if DEBUG: print("outside_top = intersect_lines(...)")
         outside_top = intersect_lines(
             outside_line,
             top_line,
         )
     else:
+        if DEBUG: print("outside_top = intersect_line_with_horizontal_boundary(...)")
         outside_top = intersect_line_with_horizontal_boundary(
             outside_line,
             0.0,
         )
 
     if bottom_line is not None:
+        if DEBUG: print("outside_bottom = intersect_lines(...)")
         outside_bottom = intersect_lines(
             outside_line,
             bottom_line,
         )
     else:
+        if DEBUG: print("outside_bottom = intersect_line_with_horizontal_boundary(...)")
         outside_bottom = intersect_line_with_horizontal_boundary(
             outside_line,
             float(H_img - 1),
@@ -1186,6 +1298,7 @@ def process_image(in_path, out_path):
         inside_x = float(W_img - 1)
 
     if top_line is not None:
+        if DEBUG: print("inside_top = intersect_line_with_vertical_boundary(...)")
         inside_top = intersect_line_with_vertical_boundary(
             top_line,
             inside_x,
@@ -1198,6 +1311,7 @@ def process_image(in_path, out_path):
         )
 
     if bottom_line is not None:
+        if DEBUG: print("inside_bottom = intersect_line_with_vertical_boundary(...)")
         inside_bottom = intersect_line_with_vertical_boundary(
             bottom_line,
             inside_x,
@@ -1353,6 +1467,8 @@ def process_image(in_path, out_path):
     # page_contour = max(contours, key=cv2.contourArea)
 
     if config.use_three_edge_deskew:
+
+        if DEBUG: print("config.use_three_edge_deskew == True")
 
         # top_pts, bottom_pts, outside_pts = split_edge_candidates(
         #     page_contour,
@@ -1872,6 +1988,8 @@ def process_image(in_path, out_path):
     else:
         # config.use_three_edge_deskew == False
         #
+        # two-edge deskew
+        #
         # The book is too tall for `scan_top_edge = "inside"`,
         # so we have to use `scan_top_edge = "top"`,
         # so the top page edge is missing.
@@ -1880,14 +1998,19 @@ def process_image(in_path, out_path):
         # `scan_top_edge == "top"` means:
         # the image top is the missing page edge.
 
+        if DEBUG: print("config.use_three_edge_deskew == False")
+
         if config.scan_top_edge != "top":
             raise NotImplementedError("two-edge deskew currently supports only scan_top_edge='top'")
 
         if outside_line is None:
-            raise RuntimeError("outside edge not detected")
+            raise RuntimeError(f"not found outside edge of {in_path}: {len(outside_pts)} candidate points")
 
         if bottom_line is None:
-            raise RuntimeError("bottom edge not detected; required for two-edge deskew")
+            raise RuntimeError(f"not found bottom edge of {in_path}: {len(bottom_pts)} candidate points")
+
+        if inside_line is None:
+            raise RuntimeError(f"not found inside edge of {in_path}: {len(inside_pts)} candidate points")
 
         # Use the two detected edges to estimate rotation.
         outside_angle = vertical_line_angle(outside_line)
@@ -1915,56 +2038,201 @@ def process_image(in_path, out_path):
             borderValue=(255, 255, 255),
         )
 
-        # Transform the two useful corners.
-        outside_bottom = intersect_lines(outside_line, bottom_line)
+        # # Transform the two useful corners.
+        # outside_bottom = intersect_lines(outside_line, bottom_line)
 
-        p = np.array(
-            [outside_bottom[0], outside_bottom[1], 1.0],
-            dtype=np.float64,
-        )
-        outside_bottom_rot = Mrot @ p
-        outside_bottom_rot = outside_bottom_rot[:2]
+        # p = np.array(
+        #     [outside_bottom[0], outside_bottom[1], 1.0],
+        #     dtype=np.float64,
+        # )
+        # outside_bottom_rot = Mrot @ p
+        # outside_bottom_rot = outside_bottom_rot[:2]
+
+        # # # The missing top edge is the top of the rotated scan.
+        # # inside_x = 0.0 if bad_on_left else float(W_img - 1)
+
+        # # FIXME patch the crop geometry
+
+        # inside_top = np.array([inside_x, 0.0], dtype=np.float64)
+        # outside_top = np.array(
+        #     [outside_bottom_rot[0], 0.0],
+        #     dtype=np.float64,
+        # )
+        # inside_bottom = np.array(
+        #     [inside_x, outside_bottom_rot[1]],
+        #     dtype=np.float64,
+        # )
+
+        # # Page dimensions.
+        # expected_w = int(round(
+        #     abs(outside_bottom_rot[0] - inside_x)
+        # ))
+        # expected_h = int(round(
+        #     abs(outside_bottom_rot[1])
+        # ))
+
+        # if expected_w <= 0 or expected_h <= 0:
+        #     raise RuntimeError(
+        #         f"invalid two-edge page size: {expected_w}x{expected_h}"
+        #     )
+
+        # src_corners = np.array([
+        #     inside_top,
+        #     outside_top,
+        #     outside_bottom_rot,
+        #     inside_bottom,
+        # ], dtype=np.float32)
+
+        # if not bad_on_left:
+        #     src_corners = np.array([
+        #         outside_top,
+        #         inside_top,
+        #         inside_bottom,
+        #         outside_bottom_rot,
+        #     ], dtype=np.float32)
+
+        # dst_corners = np.array([
+        #     [0, 0],
+        #     [expected_w - 1, 0],
+        #     [expected_w - 1, expected_h - 1],
+        #     [0, expected_h - 1],
+        # ], dtype=np.float32)
+
+        # M = cv2.getPerspectiveTransform(src_corners, dst_corners)
+
+        # warped = cv2.warpPerspective(
+        #     rotated,
+        #     M,
+        #     (expected_w, expected_h),
+        #     flags=cv2.INTER_LINEAR,
+        #     borderMode=cv2.BORDER_CONSTANT,
+        #     borderValue=(255, 255, 255),
+        # )
+
+        # Transform the detected lines into the rotated image.
+        # OpenCV's affine transform maps points from the original image
+        # into the rotated image.
+
+        # def transform_point(point, M):
+        #     p = np.array([point[0], point[1], 1.0], dtype=np.float64)
+        #     return M @ p
+
+        # def transform_line(line, M):
+        #     # Represent the line as a homogeneous vector.
+        #     # This assumes intersect_lines() uses lines represented by
+        #     # two endpoints: ((x1, y1), (x2, y2)).
+        #     p1, p2 = line
+        #     p1 = transform_point(p1, M)
+        #     p2 = transform_point(p2, M)
+
+        #     p1 = np.asarray(p1, dtype=np.float64)
+        #     p2 = np.asarray(p2, dtype=np.float64)
+
+        #     return (p1, p2)
+
+        # # Transform representative points on each detected line.
+        # outside_p1, outside_p2 = transform_line(outside_line, Mrot)
+        # inside_p1, inside_p2 = transform_line(inside_line, Mrot)
+        # bottom_p1, bottom_p2 = transform_line(bottom_line, Mrot)
+
+        # def line_coefficients(p1, p2):
+        #     # Return a*x + b*y + c = 0.
+        #     a = p1[1] - p2[1]
+        #     b = p2[0] - p1[0]
+        #     c = p1[0] * p2[1] - p2[0] * p1[1]
+        #     return np.array([a, b, c], dtype=np.float64)
+
+        # outside_rot = line_coefficients(outside_p1, outside_p2)
+        # inside_rot = line_coefficients(inside_p1, inside_p2)
+        # bottom_rot = line_coefficients(bottom_p1, bottom_p2)
+
+        def transform_point(point, M):
+            p = np.array(
+                [point[0], point[1], 1.0],
+                dtype=np.float64,
+            )
+            return M @ p
+
+
+        def transform_line(line, M):
+            vx, vy, x0, y0 = map(float, line)
+
+            # Two points on the original fitted line.
+            p1 = np.array([x0 - vx, y0 - vy], dtype=np.float64)
+            p2 = np.array([x0 + vx, y0 + vy], dtype=np.float64)
+
+            # Transform both points into rotated-image coordinates.
+            p1_rot = transform_point(p1, M)
+            p2_rot = transform_point(p2, M)
+
+            return line_coefficients(p1_rot, p2_rot)
+
+
+        def line_coefficients(p1, p2):
+            # Return homogeneous line coefficients a*x + b*y + c = 0.
+            a = p1[1] - p2[1]
+            b = p2[0] - p1[0]
+            c = p1[0] * p2[1] - p2[0] * p1[1]
+            return np.array([a, b, c], dtype=np.float64)
+
+
+        outside_rot = transform_line(outside_line, Mrot)
+        inside_rot = transform_line(inside_line, Mrot)
+        bottom_rot = transform_line(bottom_line, Mrot)
+
+        def intersect_coefficients(line1, line2):
+            a1, b1, c1 = line1
+            a2, b2, c2 = line2
+
+            det = a1 * b2 - a2 * b1
+            if abs(det) < 1e-10:
+                raise RuntimeError("Cannot intersect nearly parallel crop edges")
+
+            x = (b1 * c2 - b2 * c1) / det
+            y = (c1 * a2 - c2 * a1) / det
+            return np.array([x, y], dtype=np.float64)
 
         # The missing top edge is the top of the rotated scan.
-        inside_x = 0.0 if bad_on_left else float(W_img - 1)
+        top_boundary = np.array([0.0, 1.0, 0.0], dtype=np.float64)
 
-        inside_top = np.array([inside_x, 0.0], dtype=np.float64)
-        outside_top = np.array(
-            [outside_bottom_rot[0], 0.0],
-            dtype=np.float64,
-        )
-        inside_bottom = np.array(
-            [inside_x, outside_bottom_rot[1]],
-            dtype=np.float64,
-        )
+        inside_top = intersect_coefficients(inside_rot, top_boundary)
+        outside_top = intersect_coefficients(outside_rot, top_boundary)
 
-        # Page dimensions.
-        expected_w = int(round(
-            abs(outside_bottom_rot[0] - inside_x)
-        ))
-        expected_h = int(round(
-            abs(outside_bottom_rot[1])
-        ))
+        inside_bottom = intersect_coefficients(inside_rot, bottom_rot)
+        outside_bottom = intersect_coefficients(outside_rot, bottom_rot)
+
+        # Order the corners consistently around the page:
+        # top-left, top-right, bottom-right, bottom-left.
+        if bad_on_left:
+            corners = [
+                inside_top,
+                outside_top,
+                outside_bottom,
+                inside_bottom,
+            ]
+        else:
+            corners = [
+                outside_top,
+                inside_top,
+                inside_bottom,
+                outside_bottom,
+            ]
+
+        src_corners = np.asarray(corners, dtype=np.float32)
+
+        # Crop dimensions from the distances between the corners.
+        top_w = np.linalg.norm(src_corners[1] - src_corners[0])
+        bottom_w = np.linalg.norm(src_corners[2] - src_corners[3])
+        left_h = np.linalg.norm(src_corners[3] - src_corners[0])
+        right_h = np.linalg.norm(src_corners[2] - src_corners[1])
+
+        expected_w = int(round(max(top_w, bottom_w)))
+        expected_h = int(round(max(left_h, right_h)))
 
         if expected_w <= 0 or expected_h <= 0:
             raise RuntimeError(
                 f"invalid two-edge page size: {expected_w}x{expected_h}"
             )
-
-        src_corners = np.array([
-            inside_top,
-            outside_top,
-            outside_bottom_rot,
-            inside_bottom,
-        ], dtype=np.float32)
-
-        if not bad_on_left:
-            src_corners = np.array([
-                outside_top,
-                inside_top,
-                inside_bottom,
-                outside_bottom_rot,
-            ], dtype=np.float32)
 
         dst_corners = np.array([
             [0, 0],
@@ -1983,6 +2251,9 @@ def process_image(in_path, out_path):
             borderMode=cv2.BORDER_CONSTANT,
             borderValue=(255, 255, 255),
         )
+
+
+
 
 
     # # Add internal white border
@@ -2090,8 +2361,9 @@ def main():
     # by default, OpenCV uses multiple CPU threads
     cv2.setNumThreads(1)
 
-    if 0:
+    if DEBUG:
         # debug: disable parallel processing
+        print("num_workers = 1")
         num_workers = 1
 
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -2114,9 +2386,12 @@ def main():
                 except Exception as exc:
                     print() # end line of tqdm progress bar
                     print(f"Error processing {fname}: {type(exc).__name__}: {exc}")
+                    # FIXME this fails to kill workers
                     # kill all other workers to raise the exception immediately
-                    executor.kill_workers()
+                    # executor.kill_workers()
+                    executor.terminate_workers()
                     raise
+                    break # unreachable?
                 finally:
                     pbar.update(1)
 
