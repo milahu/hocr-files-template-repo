@@ -122,7 +122,7 @@ def load_config(config_path=config_path, base_config=None):
         config.scan_height_mm = config.unbinded_page_width_mm
         config.do_rotate = True
         config.rotate_odd, config.rotate_even = 270, 90
-    else:
+    elif config.scan_top_edge in ("top", "bottom"):
         # rare case: the physical top or bottom edge is fed first into the scanner
         config.scan_width_mm = config.unbinded_page_width_mm
         config.scan_height_mm = config.page_height_mm
