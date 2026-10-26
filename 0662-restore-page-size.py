@@ -906,7 +906,10 @@ def restore_width(
     if width == target_width:
         return img, False
 
-    if width > target_width:
+    # no. the Y-errors introduced by document scanners can have both signs
+    # positive and negative
+    # if width > target_width:
+    if False:
         raise ValueError(
             f"page {page_num}: image width {width} "
             f"is greater than restored page width {target_width}"
