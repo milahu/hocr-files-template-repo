@@ -67,11 +67,17 @@ from _shared import (
 # Configuration
 # -----------------------------------------------------------------------------
 
+DEBUG = False
+DEBUG_2 = False
+
 src = Path("065-remove-page-borders")
 dst = Path(Path(__file__).stem)
 # dst = src  # replace files in src
 
 num_workers = psutil.cpu_count(logical=False) or 1
+
+if DEBUG:
+    num_workers = 1
 
 config = load_config()
 
@@ -1074,6 +1080,14 @@ def process_image(args):
 
         img = correct_scanner_aspect_ratio(img)
 
+        if DEBUG:
+            print()
+            print(
+                f"page {page_num}: "
+                f"after aspect correction: {img.width} x {img.height}, "
+                f"do_rotate={config.do_rotate}"
+            )
+
         # ---------------------------------------------------------------------
         # Normalize height
         # ---------------------------------------------------------------------
@@ -1082,6 +1096,15 @@ def process_image(args):
             img,
             target_height,
         )
+
+        if DEBUG:
+            if img.width >= target_width:
+                print(
+                    f"page {page_num}: "
+                    f"after height normalization: {img.width} x {img.height}, "
+                    f"target={target_width} x {target_height}, "
+                    f"width difference={img.width - target_width}"
+                )
 
         # ---------------------------------------------------------------------
         # Restore width
@@ -1202,8 +1225,7 @@ def main():
     original_aspect = original_width_mm / original_height_mm
     unbinded_aspect = unbinded_width_mm / original_height_mm
 
-    if 0:
-        # debug
+    if DEBUG:
         print()
         print("page aspect-ratio diagnostics")
         print(f"  original page: {original_width_mm:.2f} x {original_height_mm:.2f} mm")
@@ -1240,8 +1262,7 @@ def main():
 
             corrected_aspect = corrected_width / corrected_height
 
-            if 0:
-                # debug
+            if DEBUG_2:
                 print()
                 print(f"{f.name}")
                 print(f"  scanner image: {original_scan_width} x {original_scan_height} px")
@@ -1324,6 +1345,14 @@ def main():
         "page size: "
         f"{target_width} x {target_height} px"
     )
+
+    if DEBUG:
+        print(f"config.do_rotate: {config.do_rotate}")
+        print(f"config.page_width_mm: {config.page_width_mm}")
+        print(f"config.page_height_mm: {config.page_height_mm}")
+        print(f"config.unbinded_page_width_mm: {config.unbinded_page_width_mm}")
+        print(f"config.page_width_px: {config.page_width_px}")
+        print(f"config.page_height_px: {config.page_height_px}")
 
     # -----------------------------------------------------------------------------
     # Process pages
