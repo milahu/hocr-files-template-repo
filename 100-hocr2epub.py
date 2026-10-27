@@ -98,7 +98,7 @@ todo_args = [
     "--doc-language", "de", # german
     # "--doc-language", "en", # english
     "--doc-isbn", "0000000000000",
-    "--doc-cover-image", "072-deskew-fix-page-size/999.tiff",
+    "--doc-cover-image", "075-level/999.tiff",
     "--canonical-url-base", "https://TODO_REPO_OWNER_USERNAME.github.io/TODO_REPO_NAME/",
     "--doc-description", """
 """,

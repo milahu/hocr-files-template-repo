@@ -144,7 +144,7 @@ crop_even_box = (0, 0, crop_size[0], crop_size[1])
 
 
 
-# Config for 0663-level.py
+# Config for 075-level.py
 
 # TODO use different thresholds for text and images
 # a too low text_lowthresh produces too much noise in black areas

@@ -14,7 +14,7 @@ txt_file = Path("0683-lightness.txt")
 
 # Directory containing the images
 src = Path("065-remove-page-borders")
-src = Path("0663-level")
+src = Path("0662-restore-page-size")
 
 # Read filenames from the second column
 image_files = []

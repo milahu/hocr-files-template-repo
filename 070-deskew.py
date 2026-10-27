@@ -25,7 +25,7 @@ from _shared import (
 # Directories
 # src = "065-remove-page-borders"
 # src = "067-force-lightmode"
-src = "0663-level"
+src = "0662-restore-page-size"
 dst = os.path.splitext(os.path.basename(__file__))[0]
 os.makedirs(dst, exist_ok=True)
 
