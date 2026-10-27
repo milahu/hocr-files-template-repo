@@ -190,13 +190,46 @@ def score_image(path):
     }
 
 
+def file_contents_equal(path_a, path_b, chunk_size=1024 * 1024):
+    """Compare two files byte-for-byte without loading them fully into memory."""
+    path_a = Path(path_a)
+    path_b = Path(path_b)
+
+    if path_a.stat().st_size != path_b.stat().st_size:
+        return False
+
+    with path_a.open("rb") as a, path_b.open("rb") as b:
+        while True:
+            chunk_a = a.read(chunk_size)
+            chunk_b = b.read(chunk_size)
+
+            if chunk_a != chunk_b:
+                return False
+
+            if not chunk_a:
+                return True
+
+
 def process_page(task):
     number, candidates, dst_dir, force = task
     dst_dir = Path(dst_dir)
     dst = dst_dir / candidates[0].name
 
     if dst.exists() and not force:
-        return number, "skipped", str(dst), None, "output exists"
+        output_mtime = dst.stat().st_mtime_ns
+        newest_input_mtime = max(
+            p.stat().st_mtime_ns
+            for p in candidates
+        )
+
+        if newest_input_mtime <= output_mtime:
+            return (
+                number,
+                "skipped",
+                str(dst),
+                None,
+                "inputs are not newer",
+            )
 
     scored = []
     errors = []
@@ -214,8 +247,28 @@ def process_page(task):
     source = Path(winner["path"])
 
     dst_dir.mkdir(parents=True, exist_ok=True)
-    # Copy rather than re-encode: preserve the original image pixels/metadata.
-    shutil.copy2(source, dst)
+
+    if dst.exists() and file_contents_equal(source, dst):
+        details = {
+            "winner": str(source),
+            "candidate_count": len(candidates),
+            "score": winner["score"],
+            "vertical_lines": winner["vertical_lines"],
+            "speckles": winner["speckles"],
+            "laplacian_variance": winner["laplacian_variance"],
+            "contrast_std": winner["contrast_std"],
+            "errors": " | ".join(errors),
+        }
+        return number, "unchanged", str(dst), details, None
+
+    # Copy to a temporary file, then atomically replace the output.
+    temp_dst = dst.with_name(dst.name + ".tmp")
+
+    try:
+        shutil.copy2(source, temp_dst)
+        temp_dst.replace(dst)
+    finally:
+        temp_dst.unlink(missing_ok=True)
 
     details = {
         "winner": str(source),
@@ -271,7 +324,10 @@ def main():
 
     report_path = dst / "045-find-best-scan.csv"
     rows = []
-    done = skipped = failed = 0
+    done = 0
+    unchanged = 0
+    skipped = 0
+    failed = 0
 
     with ProcessPoolExecutor(max_workers=max(1, args.workers)) as executor:
         with tqdm(total=len(tasks), ncols=80, unit="page") as pbar:
@@ -281,6 +337,13 @@ def main():
                 if status == "done":
                     done += 1
                     rows.append({"page": number, "status": status, **details})
+                elif status == "unchanged":
+                    unchanged += 1
+                    rows.append({
+                        "page": number,
+                        "status": status,
+                        **(details or {}),
+                    })
                 elif status == "skipped":
                     skipped += 1
                     rows.append({
@@ -309,8 +372,11 @@ def main():
         writer.writerows(rows)
 
     print(
-        f"done: selected {done} pages, skipped {skipped}, "
-        f"failed {failed}; report: {report_path}"
+        f"done: updated {done} pages, "
+        f"unchanged {unchanged}, "
+        f"skipped {skipped}, "
+        f"failed {failed}; "
+        f"report: {report_path}"
     )
 
 

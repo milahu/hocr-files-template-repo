@@ -2,8 +2,8 @@
 
 **User:** Anonymous  
 **Created:** 2026/10/27 8:00:04  
-**Updated:** 2026/10/27 8:05:52  
-**Exported:** 2026/10/27 8:07:04  
+**Updated:** 2026/10/27 8:16:44  
+**Exported:** 2026/10/27 8:17:24  
 **Link:** [<https://chatgpt.com/c/6ae04bf4-5198-83eb-87ad-1b8cc2bf7995>](https://chatgpt.com/c/6ae04bf4-5198-83eb-87ad-1b8cc2bf7995)
 
 ## Prompt:
@@ -462,9 +462,93 @@ The fourth step could ultimately produce better images than choosing a single sc
 
 **My recommendation:** test the generated script on a small subset first. The most valuable next iteration would be to use the existing `042-find-broken-scans.py` logic as a scoring component, rather than trying to invent a completely independent detector for the same artifact.
 
+## Prompt:
+
+10/27/2026, 8:10:14 AM
+
+# Selected text:
+
+## Selection 1
+
+Skips existing output files by default
+
+## My request:
+
+no. the logic here should be based on file mtimes. if one (or more) of the input files are newer than the output file, then the script should try again to find the best scan for this page, and if it finds a different result than the existing output file, then it should replace the output file with the new result
+
 ## Response:
 
-10/27/2026, 8:05:36 AM
+10/27/2026, 8:10:15 AM
+
+Agreed. The script should use modification times for incremental processing, and only replace an output when the newly selected scan differs from the existing output.
+
+I've updated `045-find-best-scan.py` accordingly.
+
+**New behavior:**
+
+- If the output doesn't exist, process the page.
+- If any input scan is newer than the output, rescore all candidates for that page.
+- If the selected scan differs from the existing output, replace the output.
+- If the selected scan is byte-for-byte identical to the existing output, leave it untouched.
+- Otherwise, skip the page.
+
+The comparison uses nanosecond modification times. Replacement uses a temporary file and an atomic rename to reduce the risk of leaving a partially written output.
+
+[Download the updated 045-find-best-scan.py](sandbox:/mnt/data/045-find-best-scan.py)
+
+Run it normally:
+
+There's no need for `--force` during normal incremental processing. You can still use it to force a full rescan of all pages.
+
+## Prompt:
+
+10/27/2026, 8:13:09 AM
+
+i cannot download your new version, i always get the error "Failed to download file. Please try again later."
+
+can you show me the necessary changes to your first version, to implement my "honor file mtimes" logic?
+
+## Response:
+
+10/27/2026, 8:13:10 AM
+
+You only need to make three changes to the first version of `045-find-best-scan.py`.
+
+## 1. Replace the existing skip logic in `process_page()`
+
+Find this code:
+
+Replace it with:
+
+Now the page is reprocessed only if at least one input is newer than the output, unless `--force` is specified.
+
+## 2. Add a file comparison helper
+
+Add this function before `process_page()`:
+
+This avoids rewriting the output if the selected candidate is already identical to it.
+
+## 3. Replace the output-copy logic in `process_page()`
+
+Find this section:
+
+Replace it with:
+
+The rest of the existing `details` dictionary remains unchanged.
+
+## One small optional improvement
+
+The original summary counts only `done`, `skipped`, and `failed`. Since we introduced the `unchanged` status, you can update the reporting loop to count it separately.
+
+Change:
+
+to:
+
+Then, in the results loop, add this branch before `elif status == "skipped":`
+
+Finally, update the summary:
+
+That's all. The important behavior is that **an output is only rewritten when it is missing or a newer input leads to a different winning image**. If you want to force a complete reevaluation, `--force` still works as before.
 
 ------------------------------------------------------------------------
 
