@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+# NOTE this color-leveling step should run as late as possible
+# because if rotation (and similar transforms)
+# (especially in 065-remove-page-borders.py and 070-deskew.py)
+# run after this color-leveling step
+# then these transforms turn sharp edges into blurry edges
+
 import os
 import sys
 import time
