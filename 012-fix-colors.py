@@ -30,7 +30,8 @@ import re
 
 import cv2
 import numpy as np
-from skimage.color import lab2rgb, deltaE_ciede2000
+from skimage.color import deltaE_ciede2000
+from skimage.color import lab2xyz, xyz2rgb
 
 
 MODEL_VERSION = 1
@@ -299,20 +300,57 @@ def predict_lab(rgb, coefficients):
 
 def lab_to_output_rgb(lab):
     """
-    Convert reference Lab (D50, 2-degree observer) to sRGB.
+    Convert CIE Lab (D50, 2-degree observer) to sRGB (D65).
 
-    skimage handles the Lab-to-XYZ-to-sRGB conversion and gamut
-    clipping. Results are 8-bit RGB values.
+    Conversion:
+        Lab D50 -> XYZ D50 -> Bradford adaptation -> XYZ D65 -> sRGB
+
+    Returns 8-bit RGB values.
     """
     lab = np.asarray(lab, dtype=np.float64)
-    rgb_float = lab2rgb(
+
+    # Step 1: Lab D50 -> XYZ D50.
+    xyz_d50 = lab2xyz(
         lab,
         illuminant="D50",
         observer="2",
         channel_axis=-1,
     )
 
-    return np.clip(np.rint(rgb_float * 255.0), 0, 255).astype(np.uint8)
+    # Step 2: Bradford chromatic adaptation, D50 -> D65.
+    bradford = np.array([
+        [ 0.8951,  0.2664, -0.1614],
+        [-0.7502,  1.7135,  0.0367],
+        [ 0.0389, -0.0685,  1.0296],
+    ], dtype=np.float64)
+
+    white_d50 = np.array([0.96422, 1.00000, 0.82521])
+    white_d65 = np.array([0.95047, 1.00000, 1.08883])
+
+    cone_d50 = bradford @ white_d50
+    cone_d65 = bradford @ white_d65
+
+    adaptation = (
+        np.linalg.inv(bradford)
+        @ np.diag(cone_d65 / cone_d50)
+        @ bradford
+    )
+
+    # Apply the adaptation matrix to every XYZ pixel.
+    xyz_d65 = xyz_d50 @ adaptation.T
+
+    # Step 3: XYZ D65 -> sRGB.
+    rgb_float = xyz2rgb(
+        xyz_d65,
+        channel_axis=-1,
+    )
+
+    # Step 4: Convert to 8-bit RGB.
+    return np.clip(
+        np.rint(rgb_float * 255.0),
+        0,
+        255,
+    ).astype(np.uint8)
 
 
 def calculate_metrics(predicted_lab, reference_lab):
@@ -437,107 +475,10 @@ def calibrate(image_path, reference_path, output_path, args):
               os.path.splitext(output_path)[0] + "-patch-report.json")
 
 
-
-def get_lightness_endpoints(profile, coefficients):
-    """
-    Predict the calibrated Lab lightness of the measured IT8
-    black (GS23) and white (GS0) patches.
-    """
-    patch_ids = profile["patch_ids"]
-    measured_rgb = np.asarray(profile["measured_rgb"], dtype=np.float64)
-
-    index = {sample_id: i for i, sample_id in enumerate(patch_ids)}
-
-    for sample_id in ("GS0", "GS23"):
-        if sample_id not in index:
-            raise ValueError(
-                f"Calibration profile is missing required patch {sample_id}"
-            )
-
-    endpoint_rgb = np.asarray([
-        measured_rgb[index["GS23"]],  # black
-        measured_rgb[index["GS0"]],   # white
-    ])
-
-    endpoint_lab = predict_lab(endpoint_rgb, coefficients)
-    black_l = float(endpoint_lab[0, 0])
-    white_l = float(endpoint_lab[1, 0])
-
-    if not np.isfinite(black_l) or not np.isfinite(white_l):
-        raise ValueError("Invalid black/white lightness endpoints.")
-
-    if white_l <= black_l:
-        raise ValueError(
-            f"Invalid lightness endpoints: black={black_l:.3f}, "
-            f"white={white_l:.3f}"
-        )
-
-    return black_l, white_l
-
-
-def normalize_lab_lightness(lab, black_l, white_l):
-    """
-    Map the calibrated black and white endpoints to L*=0 and L*=100.
-    Preserve a* and b* for colors within the endpoints.
-    """
-    lab = np.asarray(lab, dtype=np.float64).copy()
-
-    original_l = lab[..., 0]
-    normalized_l = (
-        (original_l - black_l) * 100.0 / (white_l - black_l)
-    )
-
-    below_black = normalized_l <= 0.0
-    above_white = normalized_l >= 100.0
-
-    lab[..., 0] = np.clip(normalized_l, 0.0, 100.0)
-
-    # True endpoints must be neutral black or neutral white.
-    lab[..., 1:][below_black] = 0.0
-    lab[..., 1:][above_white] = 0.0
-
-    return lab
-
-
-def correct_dark_shadows(lab, black_l, shadow_limit=35.0):
-    """
-    Correct dark gray shadows without globally stretching lightness.
-
-    L* >= shadow_limit remains unchanged.
-    Lower L* values receive a progressively stronger correction.
-    """
-    lab = np.asarray(lab, dtype=np.float64).copy()
-
-    L = lab[..., 0]
-    original_L = L.copy()
-
-    # Avoid dividing by zero if the fitted black endpoint is already zero.
-    if black_l <= 0.0:
-        return lab
-
-    # Smoothly fade the correction to zero at shadow_limit.
-    t = np.clip(1.0 - original_L / shadow_limit, 0.0, 1.0)
-    strength = t * t * (3.0 - 2.0 * t)
-
-    # Only darken the shadow range; don't brighten pixels.
-    corrected_L = original_L - black_l * strength
-
-    lab[..., 0] = np.clip(corrected_L, 0.0, 100.0)
-
-    # Neutralize pixels that reach true black.
-    is_black = lab[..., 0] <= 0.0
-    lab[..., 1][is_black] = 0.0
-    lab[..., 2][is_black] = 0.0
-
-    return lab
-
-
 def apply_calibration(image_path, output_path, profile_path):
     image = cv2.imread(image_path, cv2.IMREAD_COLOR)
     if image is None:
-        raise FileNotFoundError(
-            f"Cannot read input image: {image_path}"
-        )
+        raise FileNotFoundError(f"Cannot read input image: {image_path}")
 
     with open(profile_path, encoding="utf-8") as f:
         profile = json.load(f)
@@ -545,41 +486,23 @@ def apply_calibration(image_path, output_path, profile_path):
     if profile.get("model_version") != MODEL_VERSION:
         raise ValueError("Unsupported calibration profile version.")
 
-    coefficients = np.asarray(
-        profile["coefficients"], dtype=np.float64
-    )
+    coefficients = np.asarray(profile["coefficients"], dtype=np.float64)
 
-    black_l, white_l = get_lightness_endpoints(
-        profile, coefficients
-    )
-
-    print(
-        f"Lightness endpoints: black L*={black_l:.3f}, "
-        f"white L*={white_l:.3f}"
-    )
-
-    # OpenCV BGR -> RGB.
+    # Convert OpenCV BGR to RGB, preserving the original image shape.
     rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     h, w = rgb.shape[:2]
 
+    # Process in chunks to limit memory usage on large book scans.
     flat_rgb = rgb.reshape(-1, 3)
     corrected = np.empty((len(flat_rgb), 3), dtype=np.uint8)
 
     chunk_size = 250_000
-
     for start in range(0, len(flat_rgb), chunk_size):
         end = min(start + chunk_size, len(flat_rgb))
 
         predicted_lab = predict_lab(
             flat_rgb[start:end], coefficients
         )
-
-        predicted_lab = correct_dark_shadows(
-            predicted_lab,
-            black_l=black_l,
-            shadow_limit=35.0,
-        )
-
         corrected[start:end] = lab_to_output_rgb(predicted_lab)
 
     corrected = corrected.reshape(h, w, 3)

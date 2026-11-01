@@ -2,8 +2,8 @@
 
 **User:** Anonymous  
 **Created:** 2026/10/28 18:54:17  
-**Updated:** 2026/11/1 9:21:29  
-**Exported:** 2026/11/1 9:22:44  
+**Updated:** 2026/11/1 13:15:19  
+**Exported:** 2026/11/1 13:21:28  
 **Link:** [<https://chatgpt.com/c/6ae236c8-bdac-83eb-91be-fc9d1ca0b44c>](https://chatgpt.com/c/6ae236c8-bdac-83eb-91be-fc9d1ca0b44c)
 
 ## Prompt:
@@ -2017,6 +2017,524 @@ Keep the existing `lab_to_output_rgb()` conversion after this step.
 - **Light red:** stays unchanged if its calibrated lightness is at least 35.
 
 One important caveat: this is a conservative starting point, not a guaranteed exact-black fix. If your scanned black areas have a much higher lightness than the IT8 target's black patch, subtracting the target's predicted black lightness may not be enough. In that case, we'd need to examine the measured RGB values of the `GS23` patch and a representative black area from your book scan, then tune the shadow curve based on those measurements rather than increasing global contrast again.
+
+## Prompt:
+
+11/1/2026, 9:01:57 AM
+
+hmm, i dont like any of these changes : (  
+the best result i get is when i use the first version of your "apply calibration based on IT8 target data" code, and additionally apply color-leveling with low=70/255 and high=245/255, then i get perfect black and perfect white, and midtones like light-red are preserved (mostly) correct... the only problem i have now is that an orginally red/reddish color becomes "too orange" in my scanned result image. ideas? i would expect that a calibration with an IT8 target should fix exactly such problems (red getting scanned as red-orange)
+
+## Response:
+
+11/1/2026, 9:02:00 AM
+
+> **Diagnosing color shifts**
+>
+> I’m tracing the red-orange error through the pipeline. A strong candidate is channel-wise level adjustment after calibration, which can alter hue; I’d compare per-patch Lab residuals and test moving normalization before the color model.
+>
+> **Searched 8 websites**
+>
+> Worked for 5s
+
+I think you're right about the purpose of IT8 calibration: if a reddish original is consistently reproduced as orange, correcting that kind of color cast is exactly what the calibration is supposed to help with.
+
+And your latest observation is useful: the **first calibration version, followed by moderate black/white leveling, gives better overall results**. I'd go back to that version rather than keep adding special shadow corrections.
+
+The red-to-orange shift deserves a separate investigation. In particular, I would not try to fix it by adjusting red saturation or applying another global color-level operation. We should find out whether the calibration is actually mapping the IT8 red patches incorrectly.
+
+There are four things I'd investigate, in this order.
+
+## 1. The color-leveling itself may be shifting red toward orange
+
+This is an important possibility.
+
+If `low=70` and `high=245` are applied independently to all three RGB channels, the transformation is approximately:
+
+``` math
+C_{\text{out}} = 255 \frac{C_{\text{in}}-70}{245-70}
+```
+
+with clipping at 0 and 255.
+
+Even though the same formula is applied to every channel, it changes the ratios between R, G and B. Those ratios determine the color's hue.
+
+So the leveling that gives you excellent black and white might also be contributing to the orange shift.
+
+**I'd like to distinguish two cases:**
+
+- The red becomes orange immediately after IT8 calibration.
+- The red looks correct after IT8 calibration but becomes orange after color-leveling.
+
+Those require different fixes.
+
+## 2. The calibration model might not be accurate enough for red
+
+The first version uses a second-degree polynomial to map scanner RGB values to CIE Lab.
+
+That is a reasonable starting point, but it is an approximation. A scanner's color response can be quite nonlinear, and a polynomial may fit some colors well while leaving noticeable errors in others.
+
+In particular, I'd like to inspect the IT8 calibration errors for the red and orange patches.
+
+The reference file contains the actual Lab values for those patches, so we can compare:
+
+| Measurement   | Meaning                                                   |
+|---------------|-----------------------------------------------------------|
+| Reference Lab | What the red patch should be                              |
+| Predicted Lab | What the calibration model thinks the scanned patch is    |
+| ΔE00          | How far the prediction is from the reference perceptually |
+
+If the red patches already have large errors after calibration, we should improve the model rather than manipulate the final image.
+
+## 3. An IT8 target isn't a guarantee of perfect color reproduction
+
+There is another subtle issue: metamerism.
+
+The target's measured colors and the pigments or inks in your book can have different spectral characteristics. Two materials can look similar under one illumination but produce different scanner RGB responses.
+
+Consequently, a scanner profile made with an IT8 target cannot guarantee perfect reproduction of every possible printed pigment. \<Cite refs={\["turn538966search9","turn538966search1"\]}/\>
+
+However, I wouldn't assume this is your problem yet. First I'd check the calibration residuals.
+
+## 4. What I'd like to inspect before changing the code
+
+Could you provide the following?
+
+1.  The patch report generated by the first calibration script (the CSV or equivalent debug report, if available).
+2.  The RGB values of one reddish area in the original scan and the corresponding corrected scan, if you can sample the same area in GIMP.
+3.  Does the reddish area already look too orange **before** applying the `70/245` color-leveling?
+
+That last question is particularly important.
+
+**My preferred direction:** keep the original polynomial calibration and your current black/white leveling for now. Let's diagnose the red-channel/hue error using the actual IT8 patch measurements, then improve the calibration model if necessary. I would rather fix the underlying color transformation than introduce another collection of special-case adjustments.
+
+## Prompt:
+
+11/1/2026, 9:10:56 AM
+
+# Selected text:
+
+## Selection 1
+
+3.  An IT8 target isn't a guarantee of perfect color reproduction
+
+## My request:
+
+then what is...? i guess i would need a "color meter" (a tool to measure the exact physical color) to measure some physical reference points (black, white, red, blue, green, ...) and then have a custom calibration for every scanned book cover, because every scanned book cover can have different colors, different pigments, different paper, etc etc... right? if i wanted to buy such a color meter, what specs would i need? are there ways to quantify such a meter's "color precision"...? what is the difference between a good and a bad color meter?
+
+> 1\. Does the reddish area already look too orange before applying the 70/245 color-leveling?
+
+yes, in my scanned image, this area is always "too orange", from the original scan, to the calibrated scan, to the calibrated-and-leveled scan, all of them are "too orange", none of them looks "red enough"
+
+## Response:
+
+11/1/2026, 9:10:58 AM
+
+> **Selecting a color instrument**
+>
+> I’m comparing colorimeters with spectrophotometers, focusing on printed-cover measurement needs: geometry, aperture size, repeatability, spectral range, calibration, UV handling, and ΔE00 accuracy. I’ll also clarify scanner-specific calibration limits.
+>
+> **Refining color calibration**
+>
+> I’m distinguishing spot correction from full scanner profiling. Measured cover patches can guide corrections, but accurate conversion requires consistent illumination, scan settings, target data, and proper D50-to-D65 adaptation before producing sRGB values.
+>
+> **Selected a color instrument and refined calibration**
+>
+> **Searched 20 websites**
+>
+> Worked for 12s
+
+Yes-but there is an important distinction between **measuring a color accurately** and **making a scanner reproduce that color accurately**. A good spectrophotometer can give you a much better physical reference than an IT8 target alone, and it could be particularly useful for investigating your red-to-orange problem.
+
+First, though, your latest observation tells us something important:
+
+**The reddish area is already too orange in the original, uncalibrated scan.** That means the problem is not introduced by our black/white leveling. The scanner is recording that particular material with the wrong color balance, or the subsequent color-space conversion is introducing an error.
+
+I would investigate the latter before spending money on a measuring instrument. There is a potentially important detail in the calibration code: your reference data is D50 Lab, but the output is sRGB, whose reference white is D65. Those whites are not interchangeable. A proper D50-to-D65 chromatic adaptation is required when converting between them. If the code converts D50 Lab directly to sRGB without that adaptation, it can introduce color errors. I'll come back to this because it may be directly relevant to your orange reds.
+
+## 1. What instrument would you actually need?
+
+There are two main types of handheld color-measuring instruments:
+
+<box gap={3}>
+  <row align=start gap={3}>
+    <AsyncImage query="handheld tristimulus colorimeter measuring color instrument" aspectRatio="1:1" maxWidth="112px"/>
+    <box flex="1" gap={1}>
+      **Colorimeter**
+
+      Uses a few filtered sensors designed to approximate human color vision.
+
+      - Usually cheaper.
+      - Measures XYZ or Lab.
+      - Good for routine comparisons of similar materials.
+      - Less capable of identifying spectral differences between pigments.
+    </box>
+
+  </row>
+  <divider color="subtle"/>
+  <row align=start gap={3}>
+    <AsyncImage query="handheld reflection spectrophotometer measuring printed color patch" aspectRatio="1:1" maxWidth="112px"/>
+    <box flex="1" gap={1}>
+      **Reflectance spectrophotometer**
+
+      Measures how much light the surface reflects at many different wavelengths.
+
+      - More informative than a basic colorimeter.
+      - Can calculate Lab under different illuminants.
+      - Can reveal metamerism and spectral differences.
+      - The better choice for your application.
+    </box>
+
+  </row>
+</box>
+
+I'd choose a **handheld reflectance spectrophotometer**, not a basic colorimeter.
+
+The important advantage is that it measures a reflectance spectrum, rather than just producing three color numbers. This lets you calculate the color under different standardized illuminants and compare the spectral behavior of different pigments. \<Cite refs={\["turn237028search6","turn237028search4"\]}/\>
+
+## 2. What specifications should you look for?
+
+For measuring printed book covers, I'd look for these characteristics:
+
+| Specification | What I'd look for | Why it matters |
+|----|----|----|
+| Instrument type | Reflectance spectrophotometer | Measures spectral reflectance, not just approximate RGB |
+| Spectral range | At least 400-700 nm; preferably 380-730 nm | Covers the visible spectrum |
+| Spectral interval | 10 nm or finer | Provides useful spectral information |
+| Measurement geometry | 45°:0° or 0°:45° | Standard geometry for printed materials |
+| Measurement aperture | 4-8 mm | Measures a reasonably small area of a book cover |
+| Illuminant | D50 | Standard reference for graphic arts |
+| Observer | CIE 2° | Matches the usual IT8 reference convention |
+| Measurement mode | M1, preferably also M2 | M1 accounts for UV-related fluorescence; M2 excludes UV |
+| Output | Spectral reflectance data, Lab, XYZ, ΔE00 | Lets you use the measurements in your own software |
+
+The geometry and M1/M2 conditions are particularly important for printed materials. ISO 13655 defines the measurement conditions used in graphic arts. \<Cite refs={\["turn237028search1","turn237028search8"\]}/\>
+
+One practical consideration: if you want to measure small details on a cover, aperture size matters enormously. An 8 mm aperture cannot reliably measure a tiny 3 mm red detail without including surrounding colors.
+
+## 3. How do you quantify whether a meter is good?
+
+There are three specifications I'd pay particular attention to.
+
+### A. Repeatability
+
+This tells you how consistently the instrument measures the same physical color repeatedly.
+
+For example, you measure a red patch ten times:
+
+| Measurement | Lab result       |
+|-------------|------------------|
+| 1           | 50.2, 48.1, 32.4 |
+| 2           | 50.1, 48.2, 32.5 |
+| 3           | 50.2, 48.1, 32.4 |
+| ...         | ...              |
+
+A good instrument should produce very similar measurements every time.
+
+Look for repeatability around **0.1 ΔE or better**, preferably specified on several colored reference tiles, not just white.
+
+### B. Inter-instrument agreement
+
+This measures how closely two instruments of the same model agree.
+
+Imagine you and a printing laboratory measure the same red patch. Do both instruments report approximately the same Lab values?
+
+A good professional instrument might advertise average inter-instrument agreement around 0.3-0.5 ΔE, although the exact specification and test conditions matter.
+
+For example, X-Rite publishes specifications for its eXact instrument including average inter-instrument agreement of 0.25 ΔE*ab and maximum 0.45 ΔE*ab under its stated test conditions. \<Cite refs={\["turn237028search12"\]}/\>
+
+### C. Accuracy
+
+This is the most interesting one.
+
+Accuracy describes how close the measured result is to a trusted reference measurement.
+
+Unfortunately, manufacturers sometimes advertise impressive numbers such as:
+
+- Accuracy: 0.01
+- Resolution: 0.01
+- Precision: 0.01
+
+These numbers are not interchangeable!
+
+A display resolution of 0.01 does not mean the instrument measures colors accurately to 0.01 ΔE.
+
+I'd want to see documented comparisons against certified color reference standards, with stated measurement conditions.
+
+<text color="secondary" size="sm">For all three specifications, check whether the manufacturer reports ΔE\*ab, ΔE94 or ΔE00. They are different color-difference formulas and their numbers are not directly interchangeable.</text>
+
+## 4. Would you need to calibrate every book cover individually?
+
+Your idea is actually quite reasonable, with one qualification.
+
+Imagine you have a book cover containing:
+
+- Cream-colored paper
+- Dark black printing
+- Bright red ink
+- Blue ink
+- Green ink
+- Several unusual reddish-brown pigments
+
+You could measure selected areas on the physical cover using a spectrophotometer, then scan the cover and measure the corresponding RGB values in the scan.
+
+You'd obtain paired measurements:
+
+| Physical measurement | Scanner measurement |
+|----------------------|---------------------|
+| Lab of red area      | RGB of red area     |
+| Lab of blue area     | RGB of blue area    |
+| Lab of green area    | RGB of green area   |
+| Lab of paper         | RGB of paper        |
+| Lab of black         | RGB of black        |
+
+You could then fit a custom correction for that particular cover.
+
+This is essentially a form of custom scanner characterization.
+
+However, there are limitations:
+
+1.  You need enough representative samples to characterize the colors accurately.
+2.  The measured areas must be reasonably uniform and large enough for the instrument.
+3.  Gloss, texture, paper fluorescence and the measurement geometry can affect results.
+4.  A few measurements cannot guarantee accurate reproduction of every other pigment on the cover.
+
+And there's a particularly interesting issue: two pigments can have nearly identical Lab values under D50 but different spectral reflectance curves. Their scanner RGB responses can therefore differ. This is one reason a spectrophotometer is more useful than a simple colorimeter.
+
+In other words, your idea of building an individual calibration from actual physical colors is scientifically sound, but it is not necessarily practical to do for every book.
+
+------------------------------------------------------------------------
+
+## 5. But I think we should investigate your current orange-red problem first!
+
+I promised to return to the D50/D65 issue. I think this is particularly important.
+
+Your IT8 reference data is D50 Lab. Your desired output is sRGB, which uses a D65 white point.
+
+The previous calibration script uses:
+
+This looks reasonable, but there is a subtle problem with how `scikit-image` implements this conversion.
+
+Its `lab2rgb()` implementation converts Lab to XYZ using the specified illuminant, then converts XYZ to sRGB. The latter conversion uses the sRGB D65 reference white. It does not perform the necessary chromatic adaptation between D50 and D65. \<Cite refs={\["turn939534search0","turn939534search1","turn939534search7"\]}/\>
+
+That is potentially a significant bug in our original calibration script!
+
+The correct sequence is:
+
+<box border radius="lg" padding={3} gap={2} align="center">
+  <box background="surface-secondary" radius="md" padding={3} width="100%" align="center">
+    **Predicted CIE Lab (D50)**
+  </box>
+  <icon name="arrow-down" color="secondary" size="lg"/>
+  <box background="surface-secondary" radius="md" padding={3} width="100%" align="center">
+    **Convert Lab to XYZ (D50)**
+  </box>
+  <icon name="arrow-down" color="secondary" size="lg"/>
+  <box background="rgba(40,140,220,0.12)" radius="md" padding={3} width="100%" align="center">
+    **Chromatically adapt XYZ from D50 to D65**
+    <badge color="success">Important missing step</badge>
+  </box>
+  <icon name="arrow-down" color="secondary" size="lg"/>
+  <box background="surface-secondary" radius="md" padding={3} width="100%" align="center">
+    **Convert XYZ (D65) to sRGB**
+  </box>
+</box>
+
+The usual approach is Bradford chromatic adaptation, or better still, a properly managed ICC color conversion using LittleCMS.
+
+I would fix this before purchasing any equipment or trying a more complicated calibration model.
+
+**My recommendation:** let's first correct the D50-to-D65 conversion in `012-calibrate-it8.py` and test the result on your existing scan. It costs nothing, uses the IT8 measurements you already have, and may significantly improve the reddish colors.
+
+If the reds are still wrong afterward, then measuring selected areas of the physical book cover with a spectrophotometer becomes a much more compelling next step.
+
+------------------------------------------------------------------------
+
+## 6. What I'd consider buying
+
+For reference, these are examples of the sort of professional equipment and specifications worth investigating:
+
+- <Entity value="X-Rite eXact" category="product" disambig="Professional handheld printing spectrophotometer"/> - a printing-oriented spectrophotometer with 45°:0° geometry and multiple measurement apertures. <Link url="https://www.xrite.com/categories/portable-spectrophotometers/exact" title="Manufacturer information"/>.
+- <Entity value="X-Rite i1Pro 3" category="product" disambig="Spectrophotometer for display and print profiling"/> - a spectral measurement instrument designed for print and color profiling. <Link url="https://www.xrite.com/categories/calibration-profiling/i1pro-3" title="Manufacturer information"/>.
+
+I would not rush to buy either. First fix the conversion issue and see how much of your color problem disappears.
+
+## Prompt:
+
+11/1/2026, 9:27:04 AM
+
+ok, so i have restored the original "use IT8 calibration data" version of the 012 script, which has
+
+    def lab_to_output_rgb(lab):
+        """
+        Convert reference Lab (D50, 2-degree observer) to sRGB.
+
+        skimage handles the Lab-to-XYZ-to-sRGB conversion and gamut
+        clipping. Results are 8-bit RGB values.
+        """
+        lab = np.asarray(lab, dtype=np.float64)
+        rgb_float = lab2rgb(
+            lab,
+            illuminant="D50",
+            observer="2",
+            channel_axis=-1,
+        )
+
+        return np.clip(np.rint(rgb_float * 255.0), 0, 255).astype(np.uint8)
+
+and
+
+    def apply_calibration(image_path, output_path, profile_path):
+        image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+        if image is None:
+            raise FileNotFoundError(f"Cannot read input image: {image_path}")
+
+        with open(profile_path, encoding="utf-8") as f:
+            profile = json.load(f)
+
+        if profile.get("model_version") != MODEL_VERSION:
+            raise ValueError("Unsupported calibration profile version.")
+
+        coefficients = np.asarray(profile["coefficients"], dtype=np.float64)
+
+        # Convert OpenCV BGR to RGB, preserving the original image shape.
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        h, w = rgb.shape[:2]
+
+        # Process in chunks to limit memory usage on large book scans.
+        flat_rgb = rgb.reshape(-1, 3)
+        corrected = np.empty((len(flat_rgb), 3), dtype=np.uint8)
+
+        chunk_size = 250_000
+        for start in range(0, len(flat_rgb), chunk_size):
+            end = min(start + chunk_size, len(flat_rgb))
+
+            predicted_lab = predict_lab(
+                flat_rgb[start:end], coefficients
+            )
+            corrected[start:end] = lab_to_output_rgb(predicted_lab)
+
+        corrected = corrected.reshape(h, w, 3)
+        corrected_bgr = cv2.cvtColor(corrected, cv2.COLOR_RGB2BGR)
+
+        if not cv2.imwrite(output_path, corrected_bgr):
+            raise OSError(f"Could not write output image: {output_path}")
+
+        print(f"Corrected image saved to {output_path}")
+
+please suggest a fix for a correct D50-to-D65 conversion
+
+## Response:
+
+11/1/2026, 9:27:09 AM
+
+The fix is to explicitly perform **Bradford chromatic adaptation from D50 to D65** between the Lab-to-XYZ and XYZ-to-sRGB conversions.
+
+Your existing `lab2rgb(..., illuminant="D50")` call is not sufficient for this purpose: it converts D50 Lab to XYZ using D50, but the final sRGB conversion requires D65-referenced XYZ.
+
+I'd replace only `lab_to_output_rgb()` and leave `apply_calibration()` unchanged.
+
+## 1. Update the imports
+
+Replace:
+
+    from skimage.color import lab2rgb
+
+with:
+
+    from skimage.color import lab2xyz, xyz2rgb
+
+## 2. Replace `lab_to_output_rgb()`
+
+    def lab_to_output_rgb(lab):
+        """
+        Convert CIE Lab (D50, 2-degree observer) to sRGB (D65).
+
+        Conversion:
+            Lab D50 -> XYZ D50 -> Bradford adaptation -> XYZ D65 -> sRGB
+
+        Returns 8-bit RGB values.
+        """
+        lab = np.asarray(lab, dtype=np.float64)
+
+        # Step 1: Lab D50 -> XYZ D50.
+        xyz_d50 = lab2xyz(
+            lab,
+            illuminant="D50",
+            observer="2",
+            channel_axis=-1,
+        )
+
+        # Step 2: Bradford chromatic adaptation, D50 -> D65.
+        bradford = np.array([
+            [ 0.8951,  0.2664, -0.1614],
+            [-0.7502,  1.7135,  0.0367],
+            [ 0.0389, -0.0685,  1.0296],
+        ], dtype=np.float64)
+
+        white_d50 = np.array([0.96422, 1.00000, 0.82521])
+        white_d65 = np.array([0.95047, 1.00000, 1.08883])
+
+        cone_d50 = bradford @ white_d50
+        cone_d65 = bradford @ white_d65
+
+        adaptation = (
+            np.linalg.inv(bradford)
+            @ np.diag(cone_d65 / cone_d50)
+            @ bradford
+        )
+
+        # Apply the adaptation matrix to every XYZ pixel.
+        xyz_d65 = xyz_d50 @ adaptation.T
+
+        # Step 3: XYZ D65 -> sRGB.
+        rgb_float = xyz2rgb(
+            xyz_d65,
+            channel_axis=-1,
+        )
+
+        # Step 4: Convert to 8-bit RGB.
+        return np.clip(
+            np.rint(rgb_float * 255.0),
+            0,
+            255,
+        ).astype(np.uint8)
+
+Your existing `apply_calibration()` function can remain exactly as it is.
+
+## 3. A quick sanity test
+
+I'd also recommend testing the conversion independently before processing an entire book scan:
+
+    test_lab = np.array([
+        [100.0,   0.0,   0.0],  # White
+        [  0.0,   0.0,   0.0],  # Black
+        [ 53.24, 80.09, 67.20], # Reference red
+        [ 50.0,  20.0,  30.0],  # Reddish color
+    ])
+
+    test_rgb = lab_to_output_rgb(test_lab)
+
+    for lab, rgb in zip(test_lab, test_rgb):
+        print(f"Lab D50: {lab} -> sRGB: {rgb}")
+
+The first two results should be approximately:
+
+- White: `[255, 255, 255]`
+- Black: `[0, 0, 0]`
+
+The reference red should be approximately `[255, 0, 0]`.
+
+## 4. What to expect
+
+A few important points:
+
+- You do **not** need to recalibrate your IT8 target. Your existing calibration JSON contains the scanner-to-Lab mapping.
+- You only need to regenerate your corrected images.
+- This corrects the white-point conversion, but it cannot guarantee that every scanned color will be accurate. The polynomial model and scanner characterization still contribute errors.
+- Some highly saturated colors may be outside the sRGB gamut and therefore require clipping.
+
+**One particularly useful test:** compare the original output and the new output for the reddish area that was becoming orange. If this conversion was contributing significantly to the problem, you should see a difference there without having changed the calibration model or its coefficients.
 
 ------------------------------------------------------------------------
 
