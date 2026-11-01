@@ -2536,6 +2536,306 @@ A few important points:
 
 **One particularly useful test:** compare the original output and the new output for the reddish area that was becoming orange. If this conversion was contributing significantly to the problem, you should see a difference there without having changed the calibration model or its coefficients.
 
+## Prompt:
+
+11/1/2026, 11:30:37 AM
+
+ha! i found a much simpler explanation: my computer monitor is broken. the monitor of my notebook (Lenovo Legion 5 15ACH6H 82JU003SGE) shows the color red just as expected (maybe because that is an IPS display...?), but both (both!) of my external monitors (Acer S243HL, Samsung S24F356FHU) show orange-red instead of red! how is this possible? why do both external monitors have the same color error?  
+ok, so now i need a new external monitor. what specs should i look for for the best "color fidelity"? (but i dont want to spend 10K euros just for a computer monitor, so i dont need the absolute best "pro" version, it just should be "good enough for normal use"...)
+
+## Response:
+
+11/1/2026, 11:30:39 AM
+
+> **Diagnosing the color cast**
+>
+> I’m treating the shared orange tint as a likely common software or graphics-output setting rather than identical panel failure. I’ll check night mode, HDR, color profiles, RGB range, and monitor presets before recommending a calibrated sRGB display.
+>
+> **Diagnosed the color cast**
+>
+> **Searched 15 websites**
+>
+> Worked for 6s
+
+That's actually a very useful discovery! And it changes the direction of the investigation quite a bit: **your scanner may have been reproducing red correctly all along, while your external displays were making you think the scans were wrong.** 🙂
+
+There is one interesting question, though: why do two different external monitors show almost the same orange-red shift?
+
+## 1. Why both external monitors might show the same wrong colors
+
+There are two broad possibilities.
+
+**A. Both monitors have similar display limitations**
+
+Your Acer S243HL and Samsung S24F356FHU are older, mainstream consumer displays. They weren't designed as color-critical photographic monitors. Their color gamut, factory calibration, aging and panel characteristics can all affect color reproduction.
+
+Your Lenovo's built-in display may simply have a better color gamut and more accurate factory calibration. And yes, IPS panels often have better viewing-angle consistency, although IPS alone does not guarantee color accuracy.
+
+**B. The problem is actually upstream of both monitors**
+
+This is worth checking before buying anything. Both external monitors are driven by the same graphics card and Windows color-management setup.
+
+Possible common causes include:
+
+- An incorrect ICC color profile assigned to external displays.
+- AMD Radeon color adjustments or a custom GPU color profile.
+- Windows Night Light or another blue-light filter.
+- Incorrect monitor color-temperature settings.
+- A driver-level color enhancement or saturation setting.
+
+The fact that both external displays behave similarly makes this possibility particularly worth investigating.
+
+I'd do this quick test before purchasing anything:
+
+1.  Disable Windows Night Light.
+2.  Open Windows **Settings → System → Display → Color profile** and check which ICC profile is assigned to each external display.
+3.  Reset AMD Radeon color settings to defaults, if applicable.
+4.  Reset both monitors' OSD settings to factory defaults.
+5.  Set their color temperature to 6500K / D65, or select their sRGB mode if available.
+6.  Compare the same red test image on all three screens.
+
+If the external screens still look orange, I'd be much more confident that their own display characteristics are responsible.
+
+------------------------------------------------------------------------
+
+## 2. What monitor should you buy for good color fidelity?
+
+For your purposes, I'd prioritize accurate sRGB reproduction rather than expensive professional wide-gamut features.
+
+<box gap={3}>
+  <row align=start gap={3}>
+    <AsyncImage query="27 inch IPS monitor front view thin bezel office" aspectRatio="5:4" maxWidth="112px"/>
+    <box flex="1" gap={1}>
+      **Panel: IPS**
+
+      My first choice. Generally offers good viewing-angle consistency and is widely available in affordable color-oriented monitors.
+
+      IPS Black is also worth considering, but isn't essential.
+    </box>
+
+  </row>
+  <divider color="subtle"/>
+  <row align=start gap={3}>
+    <AsyncImage query="monitor displaying sRGB color gamut test color chart" aspectRatio="5:4" maxWidth="112px"/>
+    <box flex="1" gap={1}>
+      **Color gamut: 99-100% sRGB**
+
+      This is the most important gamut specification for your normal desktop use, scanned books, photographs and web images.
+
+      Adobe RGB coverage is optional.
+    </box>
+
+  </row>
+  <divider color="subtle"/>
+  <row align=start gap={3}>
+    <AsyncImage query="monitor factory color calibration report delta E certificate" aspectRatio="5:4" maxWidth="112px"/>
+    <box flex="1" gap={1}>
+      **Factory calibration: ΔE below 2**
+
+      Prefer a monitor with a documented factory calibration report and a dedicated sRGB mode.
+
+      ΔE below 2 is a good target.
+    </box>
+
+  </row>
+  <divider color="subtle"/>
+  <row align=start gap={3}>
+    <AsyncImage query="27 inch 4K IPS monitor adjustable ergonomic stand" aspectRatio="5:4" maxWidth="112px"/>
+    <box flex="1" gap={1}>
+      **Resolution: 2560 × 1440 or 3840 × 2160**
+
+      At 27 inches, both are useful. 4K gives noticeably sharper text and images, while QHD is cheaper and easier to drive.
+    </box>
+
+  </row>
+</box>
+
+### My recommended specification
+
+| Feature          | Recommendation                       |
+|------------------|--------------------------------------|
+| Size             | 27 inches                            |
+| Panel            | IPS                                  |
+| Resolution       | 2560 × 1440 minimum; 4K preferred    |
+| sRGB coverage    | 99-100%                              |
+| Factory accuracy | ΔE below 2                           |
+| Color depth      | 8-bit minimum                        |
+| Refresh rate     | 60-100 Hz is sufficient              |
+| Brightness       | Around 300 cd/m²                     |
+| Uniformity       | Good brightness and color uniformity |
+| Calibration      | Hardware calibration optional        |
+| Connectivity     | DisplayPort and HDMI                 |
+
+One particularly important feature: **a proper sRGB emulation mode**. Some wide-gamut monitors oversaturate ordinary sRGB images unless they have a way to restrict their output gamut.
+
+You don't need a 99% Adobe RGB monitor, 10-bit professional panel, built-in colorimeter or HDR1000 display for what you're doing.
+
+------------------------------------------------------------------------
+
+## 3. Monitors I'd investigate
+
+Here are a few concrete candidates in the more affordable color-oriented category.
+
+<box gap={3}>
+  <row align=start gap={3}>
+    <AsyncImage query="ASUS ProArt PA279CRV monitor front" aspectRatio="5:4" maxWidth="116px"/>
+    <box flex="1" gap={1}>
+      **<Entity value="ASUS ProArt PA279CRV" category="product" disambig="27-inch 4K color-oriented IPS monitor"/>**
+
+      <badge color="success">My first choice to investigate</badge>
+      - 27-inch 4K IPS
+      - 99% Adobe RGB and 99% DCI-P3 advertised
+      - Factory calibration, ΔE below 2
+      - USB-C connectivity
+
+      <text color="secondary" size="xs">Recent German CHIP test recommendation: approximately €395. <Cite refs={["turn627057search2"]}/></text>
+      <Link url="https://www.asus.com/displays-desktops/monitors/proart/proart-display-pa279crv/" title="ASUS product page"/>
+    </box>
+
+  </row>
+  <divider color="subtle"/>
+  <row align=start gap={3}>
+    <AsyncImage query="ASUS ProArt PA279CV monitor front" aspectRatio="5:4" maxWidth="116px"/>
+    <box flex="1" gap={1}>
+      **<Entity value="ASUS ProArt PA279CV" category="product" disambig="27-inch 4K sRGB IPS monitor"/>**
+
+      - 27-inch 4K IPS
+      - 100% sRGB advertised
+      - Factory-calibrated, ΔE below 2 advertised
+      - USB-C
+
+      A potentially good alternative if you find it at a substantial discount.
+
+      <Link url="https://www.asus.com/displays-desktops/monitors/proart/" title="ASUS ProArt range"/>
+    </box>
+
+  </row>
+  <divider color="subtle"/>
+  <row align=start gap={3}>
+    <AsyncImage query="Dell UltraSharp U2724D monitor front" aspectRatio="5:4" maxWidth="116px"/>
+    <box flex="1" gap={1}>
+      **<Entity value="Dell UltraSharp U2724D" category="product" disambig="27-inch QHD IPS Black monitor"/>**
+
+      - 27-inch QHD IPS Black
+      - Good general-purpose office monitor
+      - Ergonomic stand
+      - Worth considering if you prefer QHD over 4K
+
+      <Link url="https://www.dell.com/en-us/shop/dell-ultrasharp-27-monitor-u2724d/apd/210-bkqk/monitors-monitor-accessories" title="Dell product page"/>
+    </box>
+
+  </row>
+</box>
+
+The ASUS PA279CRV would be my starting point: it offers substantially more than basic sRGB coverage and is a sensible middle ground between ordinary office monitors and expensive professional reference displays.
+
+Independent testing is still important: advertised ΔE values are manufacturer claims, not guarantees that every individual unit will perform identically.
+
+## 4. One more thing: consider buying a calibration device, too
+
+<row align=start gap={3}>
+  <AsyncImage query="Calibrite Display Pro HL colorimeter monitor calibration device" aspectRatio="1:1" maxWidth="116px"/>
+  <box flex="1" gap={1}>
+    **<Entity value="Calibrite Display Pro HL" category="product" disambig="Monitor calibration colorimeter"/>**
+
+    A monitor colorimeter measures the actual light coming from your screen and creates an ICC profile to correct its displayed colors.
+
+    <Link url="https://calibrite.com/" title="Calibrite website"/>
+
+  </box>
+</row>
+
+This is a much more useful purchase for your workflow than an expensive reflectance spectrophotometer, at least initially.
+
+A decent monitor plus a calibration device gives you a reliable reference for evaluating your scanned images.
+
+------------------------------------------------------------------------
+
+## 5. One question before narrowing down the choices
+
+What is your approximate budget for the new monitor?
+
+{@body const \[budget,setBudget\] = DIL.useState("300-450 €")}  
+{@body const \[size,setSize\] = DIL.useState("27 inches")}  
+{@body const \[resolution,setResolution\] = DIL.useState("4K preferred")}  
+<box border radius="lg" padding={3} gap={3}>  
+**Budget**  
+<radio-group direction="col" value={budget} onChange={setBudget}>  
+<radio value="Under 250 €">Under 250 €</radio>  
+<radio value="250-300 €">250-300 €</radio>  
+<radio value="300-450 €">300-450 €</radio>  
+<radio value="450-600 €">450-600 €</radio>  
+<radio value="600-800 €">600-800 €</radio>  
+</radio-group>  
+<divider color="subtle"/>  
+**Preferred size**  
+<radio-group direction="col" value={size} onChange={setSize}>  
+<radio value="24 inches">24 inches</radio>  
+<radio value="27 inches">27 inches</radio>  
+<radio value="32 inches">32 inches</radio>  
+<radio value="No preference">No preference</radio>  
+</radio-group>  
+<divider color="subtle"/>  
+**Resolution**  
+<radio-group direction="col" value={resolution} onChange={setResolution}>  
+<radio value="QHD is fine">QHD is fine</radio>  
+<radio value="4K preferred">4K preferred</radio>  
+<radio value="Either">Either</radio>  
+</radio-group>  
+\<button block onClick={()=\>GenUI.issueNewTurn("My monitor preferences: budget "+budget+", size "+size+", resolution "+resolution+". Please narrow down monitor recommendations available in Germany.")}\>Find suitable monitors</button>  
+</box>
+
+I'll use those preferences to narrow the choices to monitors actually worth buying in Germany, rather than recommending expensive professional equipment you don't need.
+
+## Prompt:
+
+11/1/2026, 11:41:25 AM
+
+# Selected text:
+
+## Selection 1
+
+An incorrect ICC color profile assigned to external displays.
+
+## My request:
+
+yes!! this is on Linux, with a KDE Plasma display manager, and the default color profile was set to "None", and when i changed the color profile to "Built-in" then the wrong orange-red turned into the correct red! : ) so it turns out that i dont need a fancy display for color-fidelity, i just need the correct software settings...
+
+> Panel: IPS. My first choice. Generally offers good viewing-angle consistency
+
+yes, this is the other problem with my external monitors, the colors depend too much on the viewing angle... so yeah, definitely will buy an IPS display next
+
+## Response:
+
+11/1/2026, 11:41:27 AM
+
+Ha! That's fantastic! 😄 And what a relief: your scanner calibration wasn't necessarily the culprit after all.
+
+This is a great example of why color management matters so much. Your external monitors were displaying colors without the appropriate color profile, and KDE's **Built-in** profile corrected their color interpretation.
+
+A few takeaways for your scanning workflow:
+
+1.  **Keep the IT8 calibration.** It still corrects the scanner's color response.
+2.  **Keep the monitor's correct ICC profile enabled.** This ensures that the colors you see are represented properly.
+3.  **Don't compensate for monitor errors in your image-processing script.** Otherwise, you risk making perfectly good scans look wrong on correctly calibrated displays.
+
+And yes, IPS is a very sensible choice for your next monitor.
+
+One small clarification: IPS doesn't automatically mean accurate colors, but it generally has much better viewing-angle consistency than the older VA and especially TN panels. For your purposes, I'd look for:
+
+- 27-inch IPS
+- 2560 × 1440 or 3840 × 2160
+- 99–100% sRGB coverage
+- Factory-calibrated, ΔE below 2
+- A proper sRGB mode
+- Good viewing-angle consistency
+
+**One more Linux-specific tip:** when you eventually buy a monitor, check that KDE recognizes its EDID information and that you can assign the appropriate ICC profile to it. A factory ICC profile or a profile generated with a colorimeter is even better than blindly relying on a generic built-in profile.
+
+And perhaps the most important lesson from this whole adventure:
+
+**Don't modify your scanner calibration to compensate for a monitor that displays colors incorrectly.** 😁
+
 ------------------------------------------------------------------------
 
 Powered by [ChatGPT Exporter](https://www.chatgptexporter.com)
