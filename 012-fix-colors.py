@@ -437,10 +437,74 @@ def calibrate(image_path, reference_path, output_path, args):
               os.path.splitext(output_path)[0] + "-patch-report.json")
 
 
+
+def get_lightness_endpoints(profile, coefficients):
+    """
+    Predict the calibrated Lab lightness of the measured IT8
+    black (GS23) and white (GS0) patches.
+    """
+    patch_ids = profile["patch_ids"]
+    measured_rgb = np.asarray(profile["measured_rgb"], dtype=np.float64)
+
+    index = {sample_id: i for i, sample_id in enumerate(patch_ids)}
+
+    for sample_id in ("GS0", "GS23"):
+        if sample_id not in index:
+            raise ValueError(
+                f"Calibration profile is missing required patch {sample_id}"
+            )
+
+    endpoint_rgb = np.asarray([
+        measured_rgb[index["GS23"]],  # black
+        measured_rgb[index["GS0"]],   # white
+    ])
+
+    endpoint_lab = predict_lab(endpoint_rgb, coefficients)
+    black_l = float(endpoint_lab[0, 0])
+    white_l = float(endpoint_lab[1, 0])
+
+    if not np.isfinite(black_l) or not np.isfinite(white_l):
+        raise ValueError("Invalid black/white lightness endpoints.")
+
+    if white_l <= black_l:
+        raise ValueError(
+            f"Invalid lightness endpoints: black={black_l:.3f}, "
+            f"white={white_l:.3f}"
+        )
+
+    return black_l, white_l
+
+
+def normalize_lab_lightness(lab, black_l, white_l):
+    """
+    Map the calibrated black and white endpoints to L*=0 and L*=100.
+    Preserve a* and b* for colors within the endpoints.
+    """
+    lab = np.asarray(lab, dtype=np.float64).copy()
+
+    original_l = lab[..., 0]
+    normalized_l = (
+        (original_l - black_l) * 100.0 / (white_l - black_l)
+    )
+
+    below_black = normalized_l <= 0.0
+    above_white = normalized_l >= 100.0
+
+    lab[..., 0] = np.clip(normalized_l, 0.0, 100.0)
+
+    # True endpoints must be neutral black or neutral white.
+    lab[..., 1:][below_black] = 0.0
+    lab[..., 1:][above_white] = 0.0
+
+    return lab
+
+
 def apply_calibration(image_path, output_path, profile_path):
     image = cv2.imread(image_path, cv2.IMREAD_COLOR)
     if image is None:
-        raise FileNotFoundError(f"Cannot read input image: {image_path}")
+        raise FileNotFoundError(
+            f"Cannot read input image: {image_path}"
+        )
 
     with open(profile_path, encoding="utf-8") as f:
         profile = json.load(f)
@@ -448,23 +512,39 @@ def apply_calibration(image_path, output_path, profile_path):
     if profile.get("model_version") != MODEL_VERSION:
         raise ValueError("Unsupported calibration profile version.")
 
-    coefficients = np.asarray(profile["coefficients"], dtype=np.float64)
+    coefficients = np.asarray(
+        profile["coefficients"], dtype=np.float64
+    )
 
-    # Convert OpenCV BGR to RGB, preserving the original image shape.
+    black_l, white_l = get_lightness_endpoints(
+        profile, coefficients
+    )
+
+    print(
+        f"Lightness endpoints: black L*={black_l:.3f}, "
+        f"white L*={white_l:.3f}"
+    )
+
+    # OpenCV BGR -> RGB.
     rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     h, w = rgb.shape[:2]
 
-    # Process in chunks to limit memory usage on large book scans.
     flat_rgb = rgb.reshape(-1, 3)
     corrected = np.empty((len(flat_rgb), 3), dtype=np.uint8)
 
     chunk_size = 250_000
+
     for start in range(0, len(flat_rgb), chunk_size):
         end = min(start + chunk_size, len(flat_rgb))
 
         predicted_lab = predict_lab(
             flat_rgb[start:end], coefficients
         )
+
+        predicted_lab = normalize_lab_lightness(
+            predicted_lab, black_l, white_l
+        )
+
         corrected[start:end] = lab_to_output_rgb(predicted_lab)
 
     corrected = corrected.reshape(h, w, 3)

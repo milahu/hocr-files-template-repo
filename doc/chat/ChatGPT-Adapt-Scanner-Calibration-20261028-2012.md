@@ -2,8 +2,8 @@
 
 **User:** Anonymous  
 **Created:** 2026/10/28 18:54:17  
-**Updated:** 2026/10/28 19:57:42  
-**Exported:** 2026/10/28 20:12:34  
+**Updated:** 2026/11/1 7:31:42  
+**Exported:** 2026/11/1 7:35:24  
 **Link:** [<https://chatgpt.com/c/6ae236c8-bdac-83eb-91be-fc9d1ca0b44c>](https://chatgpt.com/c/6ae236c8-bdac-83eb-91be-fc9d1ca0b44c)
 
 ## Prompt:
@@ -1747,6 +1747,206 @@ So I'd use the **mean of the red, green, and blue channel values independently**
 One small caveat: cloning should preserve the patch's actual color and texture as much as possible. If the cloned source region has a different tone, it can bias the mean even though the patch looks visually clean.
 
 For your calibration script, I'd therefore settle on **central 50% square + arithmetic mean RGB** as the default sampling method.
+
+## Prompt:
+
+11/1/2026, 7:29:35 AM
+
+what i find surprising/irritating is that the "apply calibration" mode of the script fails to recover black areas from scans of perfectly-black areas, but these areas are darkgray, and i have to apply a rather aggressive color-leveling (low_threshold = 0.3; high_threshold = 0.7) to turn these darkgray areas into black, but this color-leveling has the unwanted side-effect of removing some colors, for example light-red becomes white. please try to fix your "apply calibration" mode, so scans of perfectly-black areas become perfectly-black, and scans of perfectly-white areas become perfectly-white
+
+## Response:
+
+11/1/2026, 7:29:37 AM
+
+> **Calibrating scan endpoints**
+>
+> I’m considering channel-wise black-and-white normalization, applied consistently during calibration and use. Since IT8 patches aren’t perfect endpoints, synthetic constraints may help, but they could distort colors.
+>
+> **Calibrated scan endpoints**
+>
+> **Inspecting endpoint behavior**
+>
+> I’m checking the calibration and application flow. The likely issue is that IT8 black and white patches represent paper and tone values, not absolute display endpoints, so pure scan black maps to gray.
+>
+> **Remapping luminance endpoints**
+>
+> I’m considering a global L\* remap using predicted grayscale endpoints: map the darkest patch to 0 and lightest to 100, clip extremes, and neutralize chroma at pure black or white.
+>
+> **Applying endpoint correction**
+>
+> I’m refining the fix: during application, I’ll predict the grayscale patch endpoints from the saved calibration, remap luminance to 0–100, clip extremes, and force clipped pixels to neutral black or white.
+>
+> **Finalizing endpoint normalization**
+>
+> I’m deriving black and white luminance anchors from the saved grayscale patches, then remapping predicted L\* during application. Values outside that range become neutral black or white, without requiring recalibration.
+>
+> **Normalized luminance endpoints and finalized endpoint correction**
+>
+> **Searched 12 websites**
+>
+> Worked for 20s
+
+The likely problem is that the current calibration model fits the scanner's RGB values to reference Lab values, but the fitted transformation does **not guarantee that black maps to black and white maps to white**. A polynomial fit can leave dark grays where the reference is black, or slightly darken white, even if its overall color error is acceptable.
+
+Your aggressive levels (`low_threshold = 0.3`, `high_threshold = 0.7`) then force the endpoints toward black and white, but they also crush real colors near those endpoints-for example, light red can become white. That's a sign that global levels are compensating for a calibration problem rather than solving it.
+
+I'd fix this in the calibration pipeline, not by applying stronger levels afterward.
+
+## 1. Proposed fix: normalize the calibrated Lab lightness
+
+I checked the current script. It already saves the measured RGB values for all IT8 patches in the calibration profile, including `GS0` (white) and `GS23` (black). That means we can use those two patches to correct the endpoints during application without changing the polynomial model. \<Cite refs={\["turn838078view0"\]} /\>
+
+The idea is:
+
+- The calibrated `GS23` black endpoint becomes Lab $`L^*=0`$.
+- The calibrated `GS0` white endpoint becomes Lab $`L^*=100`$.
+- Values between those endpoints are stretched smoothly and proportionally.
+- Values beyond the endpoints are clipped to black or white, with their chroma set to zero.
+
+Unlike your aggressive RGB level thresholds, this operates on **Lab lightness**, leaving the color channels alone for pixels between the endpoints. This should reduce the risk of turning light reds into white.
+
+## 2. Code changes
+
+In `012-fix-colors.py`, add this helper function immediately before `apply_calibration()`:
+
+<CodeBlock language="python" editable>
+def get_lightness_endpoints(profile, coefficients):
+    """
+    Predict the calibrated Lab lightness of the measured IT8
+    black (GS23) and white (GS0) patches.
+    """
+    patch_ids = profile["patch_ids"]
+    measured_rgb = np.asarray(profile["measured_rgb"], dtype=np.float64)
+
+    index = {sample_id: i for i, sample_id in enumerate(patch_ids)}
+
+    for sample_id in ("GS0", "GS23"):
+        if sample_id not in index:
+            raise ValueError(
+                f"Calibration profile is missing required patch {sample_id}"
+            )
+
+    endpoint_rgb = np.asarray([
+        measured_rgb[index["GS23"]],  # black
+        measured_rgb[index["GS0"]],   # white
+    ])
+
+    endpoint_lab = predict_lab(endpoint_rgb, coefficients)
+    black_l = float(endpoint_lab[0, 0])
+    white_l = float(endpoint_lab[1, 0])
+
+    if not np.isfinite(black_l) or not np.isfinite(white_l):
+        raise ValueError("Invalid black/white lightness endpoints.")
+
+    if white_l <= black_l:
+        raise ValueError(
+            f"Invalid lightness endpoints: black={black_l:.3f}, "
+            f"white={white_l:.3f}"
+        )
+
+    return black_l, white_l
+
+def normalize_lab_lightness(lab, black_l, white_l):  
+"""  
+Map the calibrated black and white endpoints to L\*=0 and L\*=100.  
+Preserve a\* and b\* for colors within the endpoints.  
+"""  
+lab = np.asarray(lab, dtype=np.float64).copy()
+
+    original_l = lab[..., 0]
+    normalized_l = (
+        (original_l - black_l) * 100.0 / (white_l - black_l)
+    )
+
+    below_black = normalized_l <= 0.0
+    above_white = normalized_l >= 100.0
+
+    lab[..., 0] = np.clip(normalized_l, 0.0, 100.0)
+
+    # True endpoints must be neutral black or neutral white.
+    lab[..., 1:][below_black] = 0.0
+    lab[..., 1:][above_white] = 0.0
+
+    return lab
+
+</CodeBlock>
+
+Then replace the existing `apply_calibration()` function with this version:
+
+<CodeBlock language="python" editable>
+def apply_calibration(image_path, output_path, profile_path):
+    image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+    if image is None:
+        raise FileNotFoundError(
+            f"Cannot read input image: {image_path}"
+        )
+
+    with open(profile_path, encoding="utf-8") as f:
+        profile = json.load(f)
+
+    if profile.get("model_version") != MODEL_VERSION:
+        raise ValueError("Unsupported calibration profile version.")
+
+    coefficients = np.asarray(
+        profile["coefficients"], dtype=np.float64
+    )
+
+    black_l, white_l = get_lightness_endpoints(
+        profile, coefficients
+    )
+
+    print(
+        f"Lightness endpoints: black L*={black_l:.3f}, "
+        f"white L*={white_l:.3f}"
+    )
+
+    # OpenCV BGR -> RGB.
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    h, w = rgb.shape[:2]
+
+    flat_rgb = rgb.reshape(-1, 3)
+    corrected = np.empty((len(flat_rgb), 3), dtype=np.uint8)
+
+    chunk_size = 250_000
+
+    for start in range(0, len(flat_rgb), chunk_size):
+        end = min(start + chunk_size, len(flat_rgb))
+
+        predicted_lab = predict_lab(
+            flat_rgb[start:end], coefficients
+        )
+
+        predicted_lab = normalize_lab_lightness(
+            predicted_lab, black_l, white_l
+        )
+
+        corrected[start:end] = lab_to_output_rgb(predicted_lab)
+
+    corrected = corrected.reshape(h, w, 3)
+    corrected_bgr = cv2.cvtColor(corrected, cv2.COLOR_RGB2BGR)
+
+    if not cv2.imwrite(output_path, corrected_bgr):
+        raise OSError(f"Could not write output image: {output_path}")
+
+    print(f"Corrected image saved to {output_path}")
+
+</CodeBlock>
+
+You can use your existing calibration JSON file with this change; **you should not need to recalibrate**.
+
+## 3. Important limitation
+
+This is an endpoint correction, not a guarantee that every source color intended to be black or white will be identified perfectly. It maps the calibration target's measured black and white endpoints to exact output endpoints. If your book's black areas are recorded by the scanner at RGB values brighter than the IT8 black patch, they may still remain dark gray.
+
+There is also an unavoidable trade-off: some shadow detail darker than the calibration black endpoint may be lost. However, this should be a much more controlled correction than setting RGB thresholds to `0.3` and `0.7`.
+
+The underlying Lab-to-sRGB conversion also has gamut limitations, so saturated colors may be clipped during conversion. \<Cite refs={\["turn983147search1"\]} /\>
+
+**My recommendation:** try this change first, without any additional `linear_levels()` operation. Compare a corrected page containing deep black, white paper, and light-red areas. I haven't run this against your actual scan, so the result still needs to be verified visually.
+
+## Response:
+
+11/1/2026, 7:29:56 AM
 
 ------------------------------------------------------------------------
 
