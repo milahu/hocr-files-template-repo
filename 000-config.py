@@ -16,6 +16,7 @@ max_scan_height_mm = 355.567
 # physical page size (before unbinding)
 page_width_mm = 124
 page_height_mm = 190
+pages_block_depth_mm = 0
 
 # physical page width after unbinding
 # unbinding removes a small strip (about 5 mm width) from the inside edge
