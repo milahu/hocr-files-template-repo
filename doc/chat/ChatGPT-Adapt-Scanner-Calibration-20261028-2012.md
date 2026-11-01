@@ -2,8 +2,8 @@
 
 **User:** Anonymous  
 **Created:** 2026/10/28 18:54:17  
-**Updated:** 2026/11/1 7:31:42  
-**Exported:** 2026/11/1 7:35:24  
+**Updated:** 2026/11/1 9:21:29  
+**Exported:** 2026/11/1 9:22:44  
 **Link:** [<https://chatgpt.com/c/6ae236c8-bdac-83eb-91be-fc9d1ca0b44c>](https://chatgpt.com/c/6ae236c8-bdac-83eb-91be-fc9d1ca0b44c)
 
 ## Prompt:
@@ -1944,9 +1944,79 @@ The underlying Lab-to-sRGB conversion also has gamut limitations, so saturated c
 
 **My recommendation:** try this change first, without any additional `linear_levels()` operation. Compare a corrected page containing deep black, white paper, and light-red areas. I haven't run this against your actual scan, so the result still needs to be verified visually.
 
+## Prompt:
+
+11/1/2026, 7:39:47 AM
+
+ok, the result is somewhat better for black areas (i still dont get perfect black, so i still need extra color-leveling with low=0.2 and high=0.8), but now light-red is almost lost to white in the calibration step... but ideally the calibration step should preserve light-red (and only "stretch" darkgray areas to black)
+
 ## Response:
 
-11/1/2026, 7:29:56 AM
+11/1/2026, 7:39:48 AM
+
+> **Searched 14 websites**
+>
+> Worked for a couple of seconds
+
+I think the previous fix was too aggressive: it stretched the lightness of **every pixel**, including light red. What you want is a more selective black-point correction that compresses the dark end while leaving midtones and highlights-including light red-as unchanged as possible. This is similar in spirit to black-point compensation, which is designed to map black points while preserving tonal gradations. \<Cite refs={\["turn755384search2","turn755384search14"\]}/\>
+
+## 1. Remove the global lightness stretch
+
+In `apply_calibration()`, remove the call to:
+
+That global remapping is the part most likely to be washing out light red.
+
+## 2. Apply a shadow-only correction instead
+
+The following alternative applies a smooth correction only to dark pixels. It leaves pixels with $`L^* \geq 35`$ unchanged and smoothly pushes the darkest pixels toward black.
+
+<CodeBlock language="python" editable>
+def correct_dark_shadows(lab, black_l, shadow_limit=35.0):
+    """
+    Correct dark gray shadows without globally stretching lightness.
+
+    L* >= shadow_limit remains unchanged.
+    Lower L* values receive a progressively stronger correction.
+    """
+    lab = np.asarray(lab, dtype=np.float64).copy()
+
+    L = lab[..., 0]
+    original_L = L.copy()
+
+    # Avoid dividing by zero if the fitted black endpoint is already zero.
+    if black_l <= 0.0:
+        return lab
+
+    # Smoothly fade the correction to zero at shadow_limit.
+    t = np.clip(1.0 - original_L / shadow_limit, 0.0, 1.0)
+    strength = t * t * (3.0 - 2.0 * t)
+
+    # Only darken the shadow range; don't brighten pixels.
+    corrected_L = original_L - black_l * strength
+
+    lab[..., 0] = np.clip(corrected_L, 0.0, 100.0)
+
+    # Neutralize pixels that reach true black.
+    is_black = lab[..., 0] <= 0.0
+    lab[..., 1][is_black] = 0.0
+    lab[..., 2][is_black] = 0.0
+
+    return lab
+
+</CodeBlock>
+
+Then, in `apply_calibration()`, use:
+
+Keep the existing `lab_to_output_rgb()` conversion after this step.
+
+### Why this should help
+
+- **Dark gray:** receives a correction toward black.
+- **Black:** can reach exact black if the correction is strong enough.
+- **White:** stays unchanged.
+- **Light red:** stays unchanged if its calibrated lightness is at least 35.
+
+One important caveat: this is a conservative starting point, not a guaranteed exact-black fix. If your scanned black areas have a much higher lightness than the IT8 target's black patch, subtracting the target's predicted black lightness may not be enough. In that case, we'd need to examine the measured RGB values of the `GS23` patch and a representative black area from your book scan, then tune the shadow curve based on those measurements rather than increasing global contrast again.
 
 ------------------------------------------------------------------------
 

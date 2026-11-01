@@ -499,6 +499,39 @@ def normalize_lab_lightness(lab, black_l, white_l):
     return lab
 
 
+def correct_dark_shadows(lab, black_l, shadow_limit=35.0):
+    """
+    Correct dark gray shadows without globally stretching lightness.
+
+    L* >= shadow_limit remains unchanged.
+    Lower L* values receive a progressively stronger correction.
+    """
+    lab = np.asarray(lab, dtype=np.float64).copy()
+
+    L = lab[..., 0]
+    original_L = L.copy()
+
+    # Avoid dividing by zero if the fitted black endpoint is already zero.
+    if black_l <= 0.0:
+        return lab
+
+    # Smoothly fade the correction to zero at shadow_limit.
+    t = np.clip(1.0 - original_L / shadow_limit, 0.0, 1.0)
+    strength = t * t * (3.0 - 2.0 * t)
+
+    # Only darken the shadow range; don't brighten pixels.
+    corrected_L = original_L - black_l * strength
+
+    lab[..., 0] = np.clip(corrected_L, 0.0, 100.0)
+
+    # Neutralize pixels that reach true black.
+    is_black = lab[..., 0] <= 0.0
+    lab[..., 1][is_black] = 0.0
+    lab[..., 2][is_black] = 0.0
+
+    return lab
+
+
 def apply_calibration(image_path, output_path, profile_path):
     image = cv2.imread(image_path, cv2.IMREAD_COLOR)
     if image is None:
@@ -541,8 +574,10 @@ def apply_calibration(image_path, output_path, profile_path):
             flat_rgb[start:end], coefficients
         )
 
-        predicted_lab = normalize_lab_lightness(
-            predicted_lab, black_l, white_l
+        predicted_lab = correct_dark_shadows(
+            predicted_lab,
+            black_l=black_l,
+            shadow_limit=35.0,
         )
 
         corrected[start:end] = lab_to_output_rgb(predicted_lab)
