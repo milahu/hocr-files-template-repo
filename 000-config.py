@@ -144,6 +144,13 @@ crop_even_box = (0, 0, crop_size[0], crop_size[1])
 
 
 
+# Config for 015-level-cover.py
+
+cover_lowthresh = 70 / 255 # 27.450 / 100
+cover_highthresh = 230 / 255 # 90.196 / 100
+
+
+
 # Config for 075-level.py
 
 # TODO use different thresholds for text and images

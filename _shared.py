@@ -273,6 +273,11 @@ def load_config(config_path=config_path, base_config=None):
     if hasattr(config, "images_lowthresh") and not hasattr(config, "images_highthresh"):
         config.images_highthresh = 1 - config.images_lowthresh
 
+    if not hasattr(config, "cover_lowthresh"):
+        config.cover_lowthresh = 70 / 255 # 27.450 / 100
+    if not hasattr(config, "cover_highthresh"):
+        config.cover_highthresh = 230 / 255 # 90.196 / 100
+
     if not hasattr(config, "color_pages"):
         config.color_pages = []
 
