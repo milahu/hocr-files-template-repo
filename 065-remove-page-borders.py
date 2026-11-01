@@ -7,6 +7,14 @@ by filling the missing width
 with the average color near the binding edge
 """
 
+r'''
+"deskew by content" should be done in 065-remove-page-borders.py
+to reduce generation loss from repeated resampling
+
+see also
+doc/chat/ChatGPT-Merge-Resampling-Steps-20261101-0829.md
+'''
+
 from pathlib import Path
 
 INPUT_DIR = Path("060-rotate-crop")

@@ -78,7 +78,7 @@ replace = src == dst
 
 if replace:
     tmp = Path(f"{Path(__file__).stem}.tmp.{datetime_str}")
-    bak = Path(f"070-deskew.bak.{datetime_str}")
+    bak = Path(f"{src}.bak.{datetime_str}")
 else:
     dst.mkdir(parents=True, exist_ok=True)
 

@@ -30,9 +30,12 @@ from _shared import (
 
 # --- Setup -------------------------------------------------------------------
 # os.chdir(Path(__file__).resolve().parent)
+
 src = Path("065-remove-page-borders")
 src = Path("0662-restore-page-size")
 src = Path("072-deskew-fix-page-size")
+src = Path("0662-restore-page-size")
+
 dst = Path(Path(__file__).stem)
 
 

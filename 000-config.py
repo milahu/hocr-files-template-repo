@@ -188,6 +188,7 @@ fill_white_pages_white_lightness_threshold = 99.99 / 100 # 99.99%
 
 
 
+r'''
 # config for 070-deskew.py
 
 deskew_lightness_file = "0683-lightness.txt"
@@ -218,6 +219,7 @@ deskew_ignore_pages = []
 deskew_fix_page_size_keep_small_pages = False
 # keep the image size of small pages
 # deskew_fix_page_size_keep_small_pages = True
+'''
 
 
 
