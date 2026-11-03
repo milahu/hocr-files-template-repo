@@ -2206,9 +2206,8 @@ def process_image(in_path, out_path):
 
 
 
-    else:
-        # config.use_three_edge_deskew == False
-        #
+    else: # config.use_three_edge_deskew == False
+
         # two-edge deskew
         #
         # The book is too tall for `scan_top_edge = "inside"`,
