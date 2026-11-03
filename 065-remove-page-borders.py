@@ -42,12 +42,7 @@ THRESH_MIN = 200
 # if we remove the dirty inside edge
 # then we remove a small rectangle from the inside edge
 # to get a straight inside edge (vertical)
-remove_inside_transparent_strip = True
-#
-# FIXME this produces black triangles on the inside edges
-# if we keep the dirty inside edge
-# then there is a small transparent rectangle inside of the inside edge
-# remove_inside_transparent_strip = False
+remove_inside_transparent_strip = False
 
 
 
@@ -72,7 +67,7 @@ PRACTICALLY_WHITE_THRESHOLD = 250  # for uint8 images
 CLEAN_GRAY_EDGE_ARTIFACTS = True
 # FIXME this breaks on borderless pages
 # where the "fixes" remove page contents near the page edge
-CLEAN_GRAY_EDGE_ARTIFACTS = False
+# CLEAN_GRAY_EDGE_ARTIFACTS = False
 
 # Widen the range if the scanner gray is lighter or darker than expected.
 # GRAY_STRIP_MIN = 70
@@ -1526,6 +1521,361 @@ def remove_gray_edge_artifacts(
     return image
 
 
+def remove_outside_page_edge(
+        image,
+        edge_pts,
+        outside_edge,
+        transparent=False,
+    ):
+    """
+    Replace pixels outside the detected, potentially curved page edge.
+
+    edge_pts must be in the coordinate system of image.
+    Points are (x, y).
+    """
+
+    h, w = image.shape[:2]
+
+    pts = np.asarray(edge_pts, dtype=np.float32)
+
+    if len(pts) < 2:
+        return image
+
+    # Keep only finite points.
+    pts = pts[np.isfinite(pts).all(axis=1)]
+
+    if len(pts) < 2:
+        return image
+
+    # Sort by y.
+    pts = pts[np.argsort(pts[:, 1])]
+
+    # Combine points having the same rounded y coordinate.
+    ys = np.round(pts[:, 1]).astype(int)
+    unique_ys = np.unique(ys)
+
+    xs = np.array([
+        np.median(pts[ys == y, 0])
+        for y in unique_ys
+    ])
+
+    # Only modify rows covered by actual edge detections.
+    valid_rows = (
+        (unique_ys >= 0) &
+        (unique_ys < h)
+    )
+
+    unique_ys = unique_ys[valid_rows]
+    xs = xs[valid_rows]
+
+    if len(unique_ys) < 2:
+        return image
+
+    # Interpolate the detected edge position for every image row.
+    rows = np.arange(h)
+    edge_x = np.interp(rows, unique_ys, xs)
+
+    # Do not extrapolate beyond the detected edge.
+    valid_y = (
+        (rows >= unique_ys.min()) &
+        (rows <= unique_ys.max())
+    )
+
+    columns = np.arange(w)[None, :]
+
+    if outside_edge == EDGE_LEFT:
+        # Page is to the RIGHT of this boundary.
+        outside_mask = columns < edge_x[:, None]
+
+    else:
+        # Page is to the LEFT of this boundary.
+        outside_mask = columns > edge_x[:, None]
+
+    outside_mask &= valid_y[:, None]
+
+    result = image.copy()
+
+    if transparent and result.ndim == 3 and result.shape[2] == 4:
+        result[outside_mask] = (0, 0, 0, 0)
+
+    elif result.ndim == 2:
+        result[outside_mask] = 255
+
+    elif result.shape[2] == 4:
+        result[outside_mask] = (255, 255, 255, 255)
+
+    else:
+        result[outside_mask] = (255, 255, 255)
+
+    return result
+
+
+def remove_background_outside_page(
+        image,
+        edge_points,
+        Mrot,
+        M,
+        bad_on_left,
+        scan_top_edge,
+        transparent=False,
+        crop_offset_x=0,
+    ):
+    """
+    Remove scanner background outside the detected page boundary.
+
+    The three visible page edges follow their detected curves.
+    The edge specified by scan_top_edge is left untouched and
+    represented by the corresponding output-image boundary.
+
+    edge_points contains original-image coordinates.
+    Mrot maps original -> rotated.
+    M maps rotated -> perspective-corrected output.
+    """
+
+    h, w = image.shape[:2]
+
+    inside_edge = EDGE_LEFT if bad_on_left else EDGE_RIGHT
+    outside_edge = EDGE_RIGHT if bad_on_left else EDGE_LEFT
+
+    # Map the physical edges to the four sides of the output image.
+    left_edge = inside_edge if bad_on_left else outside_edge
+    right_edge = outside_edge if bad_on_left else inside_edge
+
+    cropped_edge = {
+        "top": EDGE_TOP,
+        "bottom": EDGE_BOTTOM,
+        "inside": inside_edge,
+        "outside": outside_edge,
+    }.get(scan_top_edge)
+
+    if cropped_edge is None:
+        raise ValueError(
+            f"Invalid config.scan_top_edge: {scan_top_edge!r}"
+        )
+
+    # Transform all available original-image edge points into
+    # final output coordinates.
+    warped_edges = {}
+
+    for edge, pts in edge_points.items():
+        pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
+
+        if len(pts) < 2:
+            continue
+
+        pts_rotated = cv2.transform(
+            pts.reshape(-1, 1, 2),
+            Mrot,
+        )
+
+        pts_warped = cv2.perspectiveTransform(
+            pts_rotated,
+            M,
+        ).reshape(-1, 2)
+
+        # The inside-strip removal, if enabled, crops the left
+        # or right side of the already-warped image.
+        pts_warped[:, 0] -= crop_offset_x
+
+        pts_warped = pts_warped[
+            np.isfinite(pts_warped).all(axis=1)
+        ]
+
+        if len(pts_warped) >= 2:
+            warped_edges[edge] = pts_warped
+
+    # Return a detected curve in the required order, or None
+    # if that edge was cropped or could not be detected.
+    def get_curve(edge, sort_axis, reverse=False):
+        if edge == cropped_edge:
+            return None
+
+        pts = warped_edges.get(edge)
+
+        if pts is None or len(pts) < 2:
+            return None
+
+        order = np.argsort(pts[:, sort_axis])
+
+        if reverse:
+            order = order[::-1]
+
+        return pts[order]
+
+    # The four output-image corners.
+    tl = np.array([0, 0], dtype=np.float32)
+    tr = np.array([w - 1, 0], dtype=np.float32)
+    br = np.array([w - 1, h - 1], dtype=np.float32)
+    bl = np.array([0, h - 1], dtype=np.float32)
+
+    # Build the polygon clockwise.
+    # A missing/cropped edge is represented by the corresponding
+    # output-image border.
+    top = get_curve(EDGE_TOP, sort_axis=0)
+    right = get_curve(right_edge, sort_axis=1)
+    bottom = get_curve(EDGE_BOTTOM, sort_axis=0, reverse=True)
+    left = get_curve(left_edge, sort_axis=1, reverse=True)
+
+    def make_side(start, end, curve):
+        if curve is None:
+            return np.asarray([start, end], dtype=np.float32)
+
+        return np.vstack([
+            start,
+            curve,
+            end,
+        ])
+
+    polygon = np.vstack([
+        make_side(tl, tr, top),
+        make_side(tr, br, right)[1:],
+        make_side(br, bl, bottom)[1:],
+        make_side(bl, tl, left)[1:],
+    ])
+
+    polygon = np.round(polygon).astype(np.int32)
+
+    # Fill the page area.
+    page_mask = np.zeros((h, w), dtype=np.uint8)
+
+    cv2.fillPoly(
+        page_mask,
+        [polygon],
+        255,
+    )
+
+    # Remove everything outside the page.
+    outside = page_mask == 0
+
+    if transparent and image.ndim == 3 and image.shape[2] == 4:
+        image[outside] = (0, 0, 0, 0)
+    else:
+        if image.ndim == 2:
+            image[outside] = 255
+        elif image.shape[2] == 4:
+            image[outside] = (255, 255, 255, 255)
+        else:
+            image[outside] = (255, 255, 255)
+
+    return image
+
+
+def constrain_edge_points(
+        points,
+        edge,
+        max_angle_deg=2.0,
+        max_deviation_px=3.0,
+    ):
+    """
+    Constrain detected edge points to a slightly curved,
+    nearly straight boundary.
+
+    For vertical edges:
+        x may change only slowly as y increases.
+
+    For horizontal edges:
+        y may change only slowly as x increases.
+
+    Returns points in the original (x, y) coordinate system.
+    """
+
+    points = np.asarray(points, dtype=np.float32).reshape(-1, 2)
+
+    if len(points) < 2:
+        return points
+
+    # The independent coordinate runs along the edge.
+    if edge in (EDGE_LEFT, EDGE_RIGHT):
+        axis = 1  # y
+        value_axis = 0  # x
+    else:
+        axis = 0  # x
+        value_axis = 1  # y
+
+    # Sort and combine duplicate independent coordinates.
+    order = np.argsort(points[:, axis])
+    points = points[order]
+
+    positions = points[:, axis]
+    values = points[:, value_axis]
+
+    unique_positions, inverse = np.unique(
+        positions,
+        return_inverse=True,
+    )
+
+    sums = np.bincount(inverse, weights=values)
+    counts = np.bincount(inverse)
+    unique_values = sums / counts
+
+    if len(unique_positions) < 2:
+        return points[:0]
+
+    # Robust straight-line baseline using a median slope.
+    slopes = []
+
+    for i in range(len(unique_positions)):
+        delta = unique_positions[i + 1:] - unique_positions[i]
+        valid = delta > 0
+
+        if np.any(valid):
+            slopes.extend(
+                (
+                    (unique_values[i + 1:][valid] - unique_values[i])
+                    / delta[valid]
+                ).tolist()
+            )
+
+    slope = float(np.median(slopes)) if slopes else 0.0
+
+    # Limit the overall angle from the ideal edge direction.
+    max_slope = np.tan(np.deg2rad(max_angle_deg))
+    slope = float(np.clip(slope, -max_slope, max_slope))
+
+    # Robust intercept.
+    intercept = float(np.median(
+        unique_values - slope * unique_positions
+    ))
+
+    baseline = intercept + slope * unique_positions
+
+    # Reject points that deviate too far from the baseline.
+    residual = unique_values - baseline
+    valid = np.abs(residual) <= max_deviation_px
+
+    positions = unique_positions[valid]
+    values = unique_values[valid]
+
+    if len(positions) < 2:
+        return np.empty((0, 2), dtype=np.float32)
+
+    # Enforce the local angle limit in both directions.
+    max_step = max_slope
+
+    constrained = values.copy()
+
+    for i in range(1, len(constrained)):
+        allowed = max_step * (positions[i] - positions[i - 1])
+        constrained[i] = np.clip(
+            constrained[i],
+            constrained[i - 1] - allowed,
+            constrained[i - 1] + allowed,
+        )
+
+    for i in range(len(constrained) - 2, -1, -1):
+        allowed = max_step * (positions[i + 1] - positions[i])
+        constrained[i] = np.clip(
+            constrained[i],
+            constrained[i + 1] - allowed,
+            constrained[i + 1] + allowed,
+        )
+
+    result = np.empty((len(positions), 2), dtype=np.float32)
+    result[:, axis] = positions
+    result[:, value_axis] = constrained
+
+    return result
+
 
 def process_image(in_path, out_path):
     """
@@ -1709,44 +2059,35 @@ def process_image(in_path, out_path):
         vertical_edge_search_size,
     )
 
-    # inside_pts = None
-    # if (
-    #     not config.use_three_edge_deskew
-    #     and config.scan_top_edge == "top"
-    # ):
-    #     inside_edge = EDGE_LEFT if bad_on_left else EDGE_RIGHT
-    #     if DEBUG: print(f"{in_path}: getting inside_pts with detect_edge_points: edge_search_width_px={edge_search_width_px}")
-    #     inside_pts = detect_edge_points(
-    #         gray,
-    #         mask,
-    #         inside_edge,
-    #         edge_search_width_px,
-    #     )
-    #     if DEBUG: print(f"{in_path}: len(inside_pts) = {len(inside_pts)}")
-    # else:
-    #     if DEBUG: print(f"{in_path}: not getting inside_pts")
+    inside_edge = EDGE_LEFT if bad_on_left else EDGE_RIGHT
 
     inside_pts = None
-    if (
-        not config.use_three_edge_deskew
-        and config.scan_top_edge == "top"
-    ):
-        inside_edge = EDGE_LEFT if bad_on_left else EDGE_RIGHT
+
+    # Detect the inside edge whenever it is not the scanner-cropped edge.
+    # It is needed for cleanup even when it is not used for deskew.
+    if config.scan_top_edge != "inside":
         if DEBUG:
             print(
-                f"{in_path}: expected inside margin="
-                f"{expected_horizontal_margin_px}px, "
+                f"{in_path}: detecting inside edge; "
                 f"search width={vertical_edge_search_size}px"
             )
+
         inside_pts = detect_edge_points(
             gray,
             mask,
             inside_edge,
             vertical_edge_search_size,
         )
-        if DEBUG: print(f"{in_path}: len(inside_pts) = {len(inside_pts)}")
+
+        if DEBUG: print(f"{in_path}: len(inside_pts) before reject_outliers_vertical: {len(inside_pts)}")
+        inside_pts = reject_outliers_vertical(inside_pts)
+        if DEBUG: print(f"{in_path}: len(inside_pts) after reject_outliers_vertical: {len(inside_pts)}")
+
+        if DEBUG:
+            print(f"{in_path}: len(inside_pts) = {len(inside_pts)}")
     else:
-        if DEBUG: print(f"{in_path}: not getting inside_pts")
+        if DEBUG:
+            print(f"{in_path}: inside edge is scanner-cropped")
 
 
 
@@ -1802,6 +2143,47 @@ def process_image(in_path, out_path):
     bottom_pts = reject_outliers_horizontal(bottom_pts)
     outside_pts = reject_outliers_vertical(outside_pts)
 
+
+
+    # Preserve the detected boundaries for final gray-background cleanup.
+    # These are the filtered raw points, not RANSAC inliers.
+
+    top_pts = constrain_edge_points(
+        top_pts, EDGE_TOP,
+        max_angle_deg=2.0,
+        max_deviation_px=3.0,
+    )
+
+    bottom_pts = constrain_edge_points(
+        bottom_pts, EDGE_BOTTOM,
+        max_angle_deg=2.0,
+        max_deviation_px=3.0,
+    )
+
+    outside_pts = constrain_edge_points(
+        outside_pts, outside_edge,
+        max_angle_deg=2.0,
+        max_deviation_px=3.0,
+    )
+
+    if inside_pts is not None:
+        inside_pts = constrain_edge_points(
+            inside_pts, inside_edge,
+            max_angle_deg=2.0,
+            max_deviation_px=3.0,
+        )
+
+    cleanup_edge_pts = {
+        EDGE_TOP: top_pts.copy(),
+        EDGE_BOTTOM: bottom_pts.copy(),
+        outside_edge: outside_pts.copy(),
+    }
+
+    if inside_pts is not None:
+        cleanup_edge_pts[inside_edge] = inside_pts.copy()
+
+
+
     inside_line = None
 
     if (
@@ -1809,9 +2191,6 @@ def process_image(in_path, out_path):
         and config.scan_top_edge == "top"
     ):
         if DEBUG: print(f"{in_path}: getting inside_line with fit_line_ransac_or_none")
-        if DEBUG: print(f"{in_path}: len(inside_pts) before reject_outliers_vertical: {len(inside_pts)}")
-        inside_pts = reject_outliers_vertical(inside_pts)
-        if DEBUG: print(f"{in_path}: len(inside_pts) after reject_outliers_vertical: {len(inside_pts)}")
         inside_line = fit_line_ransac_or_none(inside_pts)
     else:
         if DEBUG: print(f"{in_path}: not getting inside_line")
@@ -2122,6 +2501,8 @@ def process_image(in_path, out_path):
     #     return
 
     # page_contour = max(contours, key=cv2.contourArea)
+
+    cleanup_crop_offset_x = 0
 
     if config.use_three_edge_deskew:
 
@@ -2599,46 +2980,14 @@ def process_image(in_path, out_path):
                 # Remove everything from x=0 through outmost_inside_x.
                 crop_x = int(math.ceil(outmost_inside_x))
                 warped = warped[:, crop_x:, :]
+                cleanup_crop_offset_x = crop_x
 
             else:
                 # Inside edge is on the RIGHT.
                 # Remove everything from outmost_inside_x through the right edge.
                 crop_x = int(math.floor(outmost_inside_x))
                 warped = warped[:, :crop_x, :]
-
-
-
-        # 8c. remove small gray artifacts along page edges
-        #
-        # The perspective transform can leave thin light-gray lines
-        # along the page edges because the detected page boundary
-        # is not perfectly straight.
-        #
-        # However, do NOT paint over page content in borderless printing.
-        #
-        # For each edge:
-        #   - inspect a strip 20..10 pixels inside the page
-        #   - if >= 99% of pixels are practically white,
-        #     assume there is no content near that edge
-        #   - paint a 10-pixel white border inside that edge
-        #
-        # The decision is made independently for each edge.
-
-        # Apply independently to all four edges.
-        for edge in ("top", "bottom", "left", "right"):
-
-            if not edge_is_white(warped, edge):
-                # Content reaches the page edge.
-                # Do not destroy it.
-                if DEBUG:
-                    print(f"white edge cleanup: {edge}: borderless -> KEEP CONTENT")
-            else:
-                # The 10..20 px interior strip is practically white,
-                # so it is safe to remove the gray artifact at the edge.
-                paint_white_edge_border(warped, edge, WHITE_BORDER_WIDTH)
-
-                if DEBUG:
-                    print(f"white edge cleanup: {edge}: white margin -> PAINT {WHITE_BORDER_WIDTH}px")
+                cleanup_crop_offset_x = 0
 
 
 
@@ -2931,14 +3280,27 @@ def process_image(in_path, out_path):
 
 
 
-    # 8d. gray edge cleanup
-    # remove curved midgray scanner artifacts
+    # TODO? remove remove_gray_edge_artifacts
 
+
+
+    # 8c. Remove scanner background outside the actual curved page edges.
+    #
+    # The scanner-cropped edge is left untouched.
+    # The other three edges follow their detected point curves.
     if CLEAN_GRAY_EDGE_ARTIFACTS:
-        warped = remove_gray_edge_artifacts(
-            warped,
+        warped = remove_background_outside_page(
+            image=warped,
+            edge_points=cleanup_edge_pts,
+            Mrot=Mrot,
+            M=M,
+            bad_on_left=bad_on_left,
+            scan_top_edge=config.scan_top_edge,
             transparent=not remove_inside_transparent_strip,
+            crop_offset_x=cleanup_crop_offset_x,
         )
+
+
 
     # # Add internal white border
     # h, w = warped.shape[:2]
