@@ -23,7 +23,10 @@ from _shared import (
 
 # --- Setup -------------------------------------------------------------------
 # os.chdir(Path(__file__).resolve().parent)
+
 src = Path("040-scan-pages")
+src = Path("045-find-best-scans")
+
 dst = Path(Path(__file__).stem)
 dst.mkdir(parents=True, exist_ok=True)
 
