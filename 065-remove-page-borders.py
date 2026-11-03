@@ -103,6 +103,25 @@ GRAY_STRIP_CLEANUP_MARGIN = 10
 # Lower if the artifact is visible along only a short section of an edge.
 GRAY_STRIP_MIN_EDGE_FRACTION = 0.05
 
+# Global contour optimization
+#
+# Penalize abrupt changes in the detected edge position.
+# Higher values produce smoother contours.
+GRAY_CONTOUR_SMOOTHNESS = 0.015
+
+# Penalty for switching between a detected edge and a missing detection.
+GRAY_CONTOUR_GAP_PENALTY = 0.6
+
+# A candidate must have evidence stronger than this baseline
+# to be preferred over no detection.
+GRAY_CONTOUR_DETECTION_BASELINE = 2.5
+
+# Keep only the strongest candidate locations per scanline.
+GRAY_CONTOUR_MAX_CANDIDATES = 8
+
+# Interpolate short gaps in the detected contour.
+GRAY_CONTOUR_MAX_INTERPOLATION_GAP = 8
+
 
 
 import os
@@ -939,27 +958,28 @@ def remove_gray_edge_artifacts(
     """
     Remove curved midgray scanner artifacts along page edges.
 
-    Each scanline is analyzed independently. This allows the detected
-    artifact boundary to follow slightly curved page edges.
+    Unlike the original implementation, this does NOT independently
+    accept or reject detections on each scanline.
 
-    Detection:
-      1. Search inward from the image edge.
-      2. Find a narrow midgray region.
-      3. Allow small interruptions in that region.
-      4. Require a sufficiently long, nearly-white region immediately
-         after it.
-      5. Remove the gray region and cleanup_margin pixels inside it.
+    Instead:
+
+      1. Find plausible gray-strip candidates on every scanline.
+      2. Score candidates using gray-strip and following-white evidence.
+      3. Select a globally consistent contour using dynamic programming.
+      4. Penalize abrupt changes in the contour position.
+      5. Interpolate short gaps in the contour.
+      6. Remove the area outside the resulting contour.
+
+    This allows the detected edge to follow a smooth curve while
+    rejecting isolated false detections caused by page content.
 
     Replacement:
+
       transparent=False:
-          Replace detected pixels with opaque white.
+          Replace removed pixels with opaque white.
 
       transparent=True:
-          Replace detected pixels with transparent pixels.
-
-    The image is modified in place when its existing channel format
-    supports the requested replacement. For transparent replacement,
-    grayscale and BGR images are converted to BGRA.
+          Replace removed pixels with transparent pixels.
 
     Returns the resulting image.
     """
@@ -993,8 +1013,13 @@ def remove_gray_edge_artifacts(
 
     if image.ndim == 2:
         gray = image
+
     elif image.shape[2] == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(
+            image,
+            cv2.COLOR_BGR2GRAY,
+        )
+
     elif image.shape[2] == 4:
         gray = cv2.cvtColor(
             image[:, :, :3],
@@ -1002,7 +1027,9 @@ def remove_gray_edge_artifacts(
         )
 
     else:
-        raise ValueError(f"Unsupported image shape: {image.shape}")
+        raise ValueError(
+            f"Unsupported image shape: {image.shape}"
+        )
 
     h, w = gray.shape
 
@@ -1012,10 +1039,11 @@ def remove_gray_edge_artifacts(
     )
 
     # ------------------------------------------------------------
-    # 3. Detect a gray strip in one scanline.
+    # 3. Find and score all plausible gray-strip candidates
+    #    in one scanline.
     # ------------------------------------------------------------
 
-    def find_gray_run(profile):
+    def find_gray_candidates(profile):
 
         limit = min(
             len(profile),
@@ -1023,14 +1051,15 @@ def remove_gray_edge_artifacts(
         )
 
         if limit < white_run + 2:
-            return None
+            return []
 
-        # Median filtering reduces sensitivity to isolated pixels
-        # and antialiasing noise.
+        # Median filtering reduces sensitivity to isolated pixels.
         profile = cv2.medianBlur(
             profile.astype(np.uint8).reshape(1, -1),
             3,
         ).ravel()
+
+        candidates = []
 
         for start in range(limit):
 
@@ -1039,9 +1068,9 @@ def remove_gray_edge_artifacts(
             ):
                 continue
 
-            # Find the end of the gray region.
+            # Find the end of the gray strip.
             #
-            # Permit isolated non-gray pixels inside the strip.
+            # Permit one non-gray pixel inside the strip.
             end = start
             gap_count = 0
 
@@ -1053,8 +1082,6 @@ def remove_gray_edge_artifacts(
                     gap_count = 0
 
                 else:
-                    # A small gap is allowed, but a longer gap
-                    # terminates the gray strip.
                     gap_count += 1
 
                     if gap_count > 1:
@@ -1067,33 +1094,229 @@ def remove_gray_edge_artifacts(
 
             strip_width = end - start
 
-            if strip_width <= 0:
+            if not (0 < strip_width <= max_strip_width):
                 continue
 
-            if strip_width > max_strip_width:
-                continue
-
-            # Require a white region immediately after the strip.
-            following = profile[end:end + white_run]
+            # Require a sufficiently long white region after the strip.
+            following = profile[
+                end:end + white_run
+            ]
 
             if len(following) < white_run:
                 continue
 
-            white_fraction = np.mean(
+            white_fraction = float(np.mean(
                 following >= white_threshold
-            )
+            ))
 
-            # Allow a small amount of noise in the white region.
             if white_fraction < 0.875:
                 continue
 
-            return start, end
+            # Measure how consistently gray the strip is.
+            strip = profile[start:end]
 
-        return None
+            gray_fraction = float(np.mean(
+                (strip >= gray_min) &
+                (strip <= gray_max)
+            ))
+
+            # Score the candidate.
+            #
+            # A strong candidate has:
+            #   - a consistently gray strip
+            #   - a nearly-white region immediately inside it
+            #   - a plausible strip width
+            width_score = min(
+                strip_width / max(1.0, max_strip_width),
+                1.0,
+            )
+
+            score = (
+                gray_fraction
+                + 2.0 * white_fraction
+                + 0.25 * width_score
+            )
+
+            candidates.append((
+                start,
+                end,
+                score,
+            ))
+
+        # Keep the strongest candidates.
+        #
+        # Nearby candidates are usually just different starting
+        # positions for the same gray strip. Keep only one of them.
+        candidates.sort(
+            key=lambda c: c[2],
+            reverse=True,
+        )
+
+        selected = []
+
+        for candidate in candidates:
+
+            start, end, score = candidate
+
+            if any(
+                abs(end - other[1]) < 3
+                for other in selected
+            ):
+                continue
+
+            selected.append(candidate)
+
+            if len(selected) >= GRAY_CONTOUR_MAX_CANDIDATES:
+                break
+
+        # Sort spatially for convenient debugging.
+        selected.sort(
+            key=lambda c: c[1]
+        )
+
+        return selected
 
     # ------------------------------------------------------------
-    # 4. Detect artifacts independently on each edge.
-    # Analyze every scanline perpendicular to the requested edge.
+    # 4. Select a globally smooth contour using dynamic programming.
+    # ------------------------------------------------------------
+
+    def select_smooth_contour(candidates_per_line):
+
+        num_lines = len(candidates_per_line)
+
+        if num_lines == 0:
+            return []
+
+        # Each scanline has:
+        #
+        #   candidate 0
+        #   candidate 1
+        #   ...
+        #   no detection
+        #
+        # The last state always represents no detection.
+
+        states_per_line = [
+            candidates + [None]
+            for candidates in candidates_per_line
+        ]
+
+        costs = []
+        back = []
+
+        def unary_cost(candidate):
+
+            if candidate is None:
+                return 0.0
+
+            score = candidate[2]
+
+            # Candidates weaker than the baseline are less attractive
+            # than choosing no detection.
+            return -(
+                score - GRAY_CONTOUR_DETECTION_BASELINE
+            )
+
+        def transition_cost(previous, current):
+
+            if previous is None and current is None:
+                return 0.0
+
+            if previous is None or current is None:
+                return GRAY_CONTOUR_GAP_PENALTY
+
+            # Compare the inner edge of the gray strip.
+            previous_x = previous[1]
+            current_x = current[1]
+
+            delta = current_x - previous_x
+
+            return (
+                GRAY_CONTOUR_SMOOTHNESS
+                * delta
+                * delta
+            )
+
+        # Initialize the first scanline.
+        first_states = states_per_line[0]
+
+        first_costs = np.array(
+            [
+                unary_cost(candidate)
+                for candidate in first_states
+            ],
+            dtype=np.float64,
+        )
+
+        costs.append(first_costs)
+
+        back.append(
+            np.full(
+                len(first_states),
+                -1,
+                dtype=np.int32,
+            )
+        )
+
+        # Forward dynamic-programming pass.
+        for i in range(1, num_lines):
+
+            previous_states = states_per_line[i - 1]
+            current_states = states_per_line[i]
+
+            previous_costs = costs[-1]
+
+            current_costs = np.full(
+                len(current_states),
+                np.inf,
+                dtype=np.float64,
+            )
+
+            current_back = np.full(
+                len(current_states),
+                -1,
+                dtype=np.int32,
+            )
+
+            for j, current in enumerate(current_states):
+
+                best_cost = np.inf
+                best_previous = -1
+
+                for k, previous in enumerate(previous_states):
+
+                    cost = (
+                        previous_costs[k]
+                        + transition_cost(previous, current)
+                        + unary_cost(current)
+                    )
+
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_previous = k
+
+                current_costs[j] = best_cost
+                current_back[j] = best_previous
+
+            costs.append(current_costs)
+            back.append(current_back)
+
+        # Backtrack the globally optimal path.
+        state_idx = int(np.argmin(costs[-1]))
+
+        path = [None] * num_lines
+
+        for i in range(num_lines - 1, -1, -1):
+
+            path[i] = states_per_line[i][state_idx]
+
+            if i > 0:
+                state_idx = int(back[i][state_idx])
+
+        return path
+
+    # ------------------------------------------------------------
+    # 5. Build the cleanup mask for all requested edges.
     # ------------------------------------------------------------
 
     cleanup_mask = np.zeros(
@@ -1103,63 +1326,56 @@ def remove_gray_edge_artifacts(
 
     for edge in edges:
 
-        edge_mask = np.zeros(
-            (h, w),
-            dtype=bool,
-        )
-
-        edge_hits = 0
-        edge_length = h if edge in ("left", "right") else w
-
-        for i in range(edge_length):
-            if edge == "left":
-                profile = gray[i, :]
-            elif edge == "right":
-                profile = gray[i, ::-1]
-            elif edge == "top":
-                profile = gray[:, i]
-            elif edge == "bottom":
-                profile = gray[::-1, i]
-            else:
-                raise ValueError(f"Invalid edge: {edge}")
-
-            result = find_gray_run(profile)
-
-            if result is None:
-                continue
-
-            start, end = result
-
-            # Remove the gray shape plus a small margin inside
-            # the page, where antialiasing may have contaminated
-            # the white paper.
-            clean_end = min(
-                end + cleanup_margin,
-                search_depth,
-                len(profile),
+        if edge not in (
+            "left",
+            "right",
+            "top",
+            "bottom",
+        ):
+            raise ValueError(
+                f"Invalid edge: {edge}"
             )
 
+        edge_length = (
+            h
+            if edge in ("left", "right")
+            else w
+        )
+
+        candidates_per_line = []
+
+        # Collect candidates from every scanline.
+        for i in range(edge_length):
+
             if edge == "left":
-                edge_mask[i, start:clean_end] = True
+                profile = gray[i, :]
 
             elif edge == "right":
-                edge_mask[
-                    i,
-                    w-clean_end:w-start,
-                ] = True
+                profile = gray[i, ::-1]
 
             elif edge == "top":
-                edge_mask[start:clean_end, i] = True
+                profile = gray[:, i]
 
             else:  # bottom
-                edge_mask[
-                    h-clean_end:h-start,
-                    i,
-                ] = True
+                profile = gray[::-1, i]
 
-            edge_hits += 1
+            candidates = find_gray_candidates(profile)
 
-        # Require a minimum number of successful scanlines.
+            candidates_per_line.append(candidates)
+
+        # Select the globally optimal contour.
+        path = select_smooth_contour(
+            candidates_per_line
+        )
+
+        detected = [
+            i
+            for i, candidate in enumerate(path)
+            if candidate is not None
+        ]
+
+        edge_hits = len(detected)
+
         min_hits = max(
             1,
             int(edge_length * min_edge_fraction),
@@ -1170,29 +1386,128 @@ def remove_gray_edge_artifacts(
             if DEBUG:
                 print(
                     f"gray edge cleanup: {edge}: "
-                    f"only {edge_hits}/{edge_length} hits; "
-                    f"skipped"
+                    f"only {edge_hits}/{edge_length} "
+                    f"contour detections; skipped"
                 )
 
             continue
 
-        # Only add detections from this edge after it passes
-        # the minimum-hit requirement.
-        cleanup_mask |= edge_mask
+        # --------------------------------------------------------
+        # 6. Interpolate short gaps in the contour.
+        # --------------------------------------------------------
+
+        # Store the inner boundary of the gray strip and its start.
+        starts = np.full(
+            edge_length,
+            np.nan,
+            dtype=np.float32,
+        )
+
+        ends = np.full(
+            edge_length,
+            np.nan,
+            dtype=np.float32,
+        )
+
+        for i, candidate in enumerate(path):
+
+            if candidate is None:
+                continue
+
+            starts[i] = candidate[0]
+            ends[i] = candidate[1]
+
+        # Interpolate only short gaps between actual detections.
+        #
+        # Long gaps are left untouched because they may indicate
+        # that the detected contour is not trustworthy there.
+        for i in range(len(detected) - 1):
+
+            a = detected[i]
+            b = detected[i + 1]
+
+            gap = b - a - 1
+
+            if not (
+                0 < gap <= GRAY_CONTOUR_MAX_INTERPOLATION_GAP
+            ):
+                continue
+
+            for j in range(a + 1, b):
+
+                t = (j - a) / (b - a)
+
+                starts[j] = (
+                    starts[a] * (1.0 - t)
+                    + starts[b] * t
+                )
+
+                ends[j] = (
+                    ends[a] * (1.0 - t)
+                    + ends[b] * t
+                )
+
+        # --------------------------------------------------------
+        # 7. Create the actual cleanup mask.
+        # --------------------------------------------------------
+
+        for i in range(edge_length):
+
+            if not np.isfinite(ends[i]):
+                continue
+
+            start = int(round(starts[i]))
+            end = int(round(ends[i]))
+
+            clean_end = min(
+                end + cleanup_margin,
+                search_depth,
+            )
+
+            if clean_end <= start:
+                continue
+
+            if edge == "left":
+
+                cleanup_mask[
+                    i,
+                    start:clean_end,
+                ] = True
+
+            elif edge == "right":
+
+                cleanup_mask[
+                    i,
+                    w-clean_end:w-start,
+                ] = True
+
+            elif edge == "top":
+
+                cleanup_mask[
+                    start:clean_end,
+                    i,
+                ] = True
+
+            else:  # bottom
+
+                cleanup_mask[
+                    h-clean_end:h-start,
+                    i,
+                ] = True
 
         if DEBUG:
             print(
                 f"gray edge cleanup: {edge}: "
-                f"{edge_hits}/{edge_length} scanlines detected"
+                f"{edge_hits}/{edge_length} detections, "
+                f"contour optimized globally"
             )
 
     # ------------------------------------------------------------
-    # 5. Replace detected pixels.
+    # 8. Replace detected pixels.
     # ------------------------------------------------------------
 
     if transparent:
 
-        # Transparent black is a convenient representation.
         image[cleanup_mask, :3] = 0
         image[cleanup_mask, 3] = 0
 
@@ -1205,7 +1520,6 @@ def remove_gray_edge_artifacts(
         image[cleanup_mask, :3] = 255
 
     else:
-        # BGRA: white must also be fully opaque.
         image[cleanup_mask, :3] = 255
         image[cleanup_mask, 3] = 255
 
