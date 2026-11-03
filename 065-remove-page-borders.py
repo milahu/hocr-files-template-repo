@@ -70,6 +70,9 @@ PRACTICALLY_WHITE_THRESHOLD = 250  # for uint8 images
 # to avoid accidentally removing content far inside the page.
 
 CLEAN_GRAY_EDGE_ARTIFACTS = True
+# FIXME this breaks on borderless pages
+# where the "fixes" remove page contents near the page edge
+CLEAN_GRAY_EDGE_ARTIFACTS = False
 
 # Widen the range if the scanner gray is lighter or darker than expected.
 # GRAY_STRIP_MIN = 70
