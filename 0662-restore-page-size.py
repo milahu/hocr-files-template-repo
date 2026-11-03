@@ -198,115 +198,6 @@ def get_alpha_channel(img):
     return None
 
 
-def cleanup_transparent_inner_edge(img, inside_on_left):
-    """
-    Remove a transparent triangle / strip at the inner edge.
-
-    Find the maximum horizontal extent of pixels that are not fully opaque.
-
-    For an inner edge on the left:
-        crop everything from x=0 through outmost_inside_x.
-
-    For an inner edge on the right:
-        crop everything from outmost_inside_x through the right edge.
-
-    This follows the same principle as:
-
-        outmost_inside_x
-
-    in 065-remove-page-borders.py.
-
-    The result has a perfectly vertical inner edge.
-    """
-
-    alpha = get_alpha_channel(img)
-
-    if alpha is None:
-        return img
-
-    alpha_np = np.asarray(alpha)
-
-    # Fully opaque is 255.
-    #
-    # Any value below 255 belongs to the transparent / partially transparent
-    # strip. Using < 255 also catches half-transparent interpolation pixels.
-    transparent = alpha_np < 255
-
-    if not np.any(transparent):
-        return img
-
-    height, width = transparent.shape
-
-    if inside_on_left:
-
-        # For every row, find the rightmost transparent pixel.
-        #
-        # -1 means: no transparent pixel on that row.
-        x_positions = np.where(
-            transparent,
-            np.arange(width)[None, :],
-            -1,
-        )
-
-        outmost_inside_x = int(x_positions.max())
-
-        # Same semantics as:
-        #
-        # crop_x = ceil(outmost_inside_x)
-        # warped = warped[:, crop_x:, :]
-        #
-        crop_x = outmost_inside_x + 1
-
-        if crop_x >= width:
-            # Something is seriously wrong: the whole image is transparent.
-            raise ValueError(
-                "transparent inner-edge cleanup would remove the whole image"
-            )
-
-        return img.crop(
-            (
-                crop_x,
-                0,
-                width,
-                height,
-            )
-        )
-
-    # Inner edge is on the right.
-
-    # For every row, find the leftmost transparent pixel.
-    #
-    # width means: no transparent pixel on that row.
-    x_positions = np.where(
-        transparent,
-        np.arange(width)[None, :],
-        width,
-    )
-
-    outmost_inside_x = int(x_positions.min())
-
-    # Same semantics as:
-    #
-    # crop_x = floor(outmost_inside_x)
-    # warped = warped[:, :crop_x, :]
-    #
-    crop_x = outmost_inside_x
-
-    if crop_x <= 0:
-        raise ValueError(
-            "transparent inner-edge cleanup would remove the whole image"
-        )
-
-    return img.crop(
-        (
-            0,
-            0,
-            crop_x,
-            height,
-        )
-    )
-
-
 def remove_alpha_on_white(img):
     """
     Replace transparent pixels with white and remove the alpha channel.
@@ -1064,18 +955,9 @@ def process_image(args):
 
         if has_alpha_channel(img):
 
-            # First remove the maximum extent of the transparent inner-edge
-            # triangle. This makes the inner edge vertical.
-            img = cleanup_transparent_inner_edge(
-                img,
-                inside_on_left=inside_on_left,
-            )
-
-            # Then replace any remaining transparency with white and remove the
-            # alpha channel.
-            img = remove_alpha_on_white(
-                img,
-            )
+            # Replace transparent pixels with white.
+            # The page boundary has already been cleaned by script 065.
+            img = remove_alpha_on_white(img)
 
         # ---------------------------------------------------------------------
         # Correct scanner aspect-ratio distortion
