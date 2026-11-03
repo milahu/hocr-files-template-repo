@@ -2249,14 +2249,35 @@ def process_image(in_path, out_path):
             1.0,
         )
 
-        rotated = cv2.warpAffine(
-            img,
-            Mrot,
-            (W_img, H_img),
-            flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=(255, 255, 255),
-        )
+        if remove_inside_transparent_strip:
+            # remove the extra inside edge
+            # rotate with gray background
+            rotated = cv2.warpAffine(
+                img,
+                Mrot,
+                (W_img, H_img),
+                # borderValue=(255,255,255) # white
+                borderValue=(128,128,128) # gray
+            )
+        else:
+            # keep the extra inside edge
+            # rotate with transparent background
+            # add alpha channel
+            img_bgra = cv2.cvtColor(
+                img,
+                cv2.COLOR_BGR2BGRA,
+            )
+            # init alpha channel
+            # img_bgra[:, :, 3] = 255
+            rotated_bgra = cv2.warpAffine(
+                img_bgra,
+                Mrot,
+                (W_img, H_img),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(0, 0, 0, 0),
+            )
+            rotated = rotated_bgra
 
         # # Transform the two useful corners.
         # outside_bottom = intersect_lines(outside_line, bottom_line)
