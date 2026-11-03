@@ -934,85 +934,180 @@ def remove_gray_edge_artifacts(
         white_run=GRAY_STRIP_WHITE_RUN,
         cleanup_margin=GRAY_STRIP_CLEANUP_MARGIN,
         min_edge_fraction=GRAY_STRIP_MIN_EDGE_FRACTION,
+        transparent=False,
     ):
     """
-    Remove narrow midgray strips followed by white page background.
+    Remove curved midgray scanner artifacts along page edges.
 
-    Each scanline is analyzed independently, so the detected boundary
-    may curve along the edge.
+    Each scanline is analyzed independently. This allows the detected
+    artifact boundary to follow slightly curved page edges.
 
-    Only gray runs followed by a sufficiently long white run qualify.
-    The detected gray run and cleanup_margin pixels on its inner side
-    are painted white.
+    Detection:
+      1. Search inward from the image edge.
+      2. Find a narrow midgray region.
+      3. Allow small interruptions in that region.
+      4. Require a sufficiently long, nearly-white region immediately
+         after it.
+      5. Remove the gray region and cleanup_margin pixels inside it.
 
-    The image is modified in place and returned.
+    Replacement:
+      transparent=False:
+          Replace detected pixels with opaque white.
+
+      transparent=True:
+          Replace detected pixels with transparent pixels.
+
+    The image is modified in place when its existing channel format
+    supports the requested replacement. For transparent replacement,
+    grayscale and BGR images are converted to BGRA.
+
+    Returns the resulting image.
     """
+
+    # ------------------------------------------------------------
+    # 1. Ensure the image supports the requested replacement.
+    # ------------------------------------------------------------
+
+    if transparent:
+
+        if image.ndim == 2:
+            image = cv2.cvtColor(
+                image,
+                cv2.COLOR_GRAY2BGRA,
+            )
+
+        elif image.shape[2] == 3:
+            image = cv2.cvtColor(
+                image,
+                cv2.COLOR_BGR2BGRA,
+            )
+
+        elif image.shape[2] != 4:
+            raise ValueError(
+                f"Unsupported image shape: {image.shape}"
+            )
+
+    # ------------------------------------------------------------
+    # 2. Convert to grayscale for detection.
+    # ------------------------------------------------------------
 
     if image.ndim == 2:
         gray = image
     elif image.shape[2] == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     elif image.shape[2] == 4:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+        gray = cv2.cvtColor(
+            image[:, :, :3],
+            cv2.COLOR_BGR2GRAY,
+        )
+
     else:
         raise ValueError(f"Unsupported image shape: {image.shape}")
 
     h, w = gray.shape
 
-    # Boolean mask of pixels to whiten.
-    cleanup_mask = np.zeros((h, w), dtype=bool)
+    search_depth = min(
+        search_depth,
+        max(h, w),
+    )
+
+    # ------------------------------------------------------------
+    # 3. Detect a gray strip in one scanline.
+    # ------------------------------------------------------------
 
     def find_gray_run(profile):
-        """
-        Find a narrow gray run followed by a white run.
 
-        profile[0] is nearest the image edge. The profile proceeds
-        inward into the page.
-        """
-        limit = min(len(profile), search_depth)
+        limit = min(
+            len(profile),
+            search_depth,
+        )
+
+        if limit < white_run + 2:
+            return None
+
+        # Median filtering reduces sensitivity to isolated pixels
+        # and antialiasing noise.
+        profile = cv2.medianBlur(
+            profile.astype(np.uint8).reshape(1, -1),
+            3,
+        ).ravel()
 
         for start in range(limit):
-            # Skip non-gray pixels.
-            if not (gray_min <= profile[start] <= gray_max):
+
+            if not (
+                gray_min <= profile[start] <= gray_max
+            ):
                 continue
 
-            end = start + 1
+            # Find the end of the gray region.
+            #
+            # Permit isolated non-gray pixels inside the strip.
+            end = start
+            gap_count = 0
 
-            while (
-                end < limit
-                and gray_min <= profile[end] <= gray_max
-            ):
+            while end < limit:
+
+                value = profile[end]
+
+                if gray_min <= value <= gray_max:
+                    gap_count = 0
+
+                else:
+                    # A small gap is allowed, but a longer gap
+                    # terminates the gray strip.
+                    gap_count += 1
+
+                    if gap_count > 1:
+                        break
+
                 end += 1
+
+            # Exclude trailing gap pixels.
+            end -= gap_count
 
             strip_width = end - start
 
+            if strip_width <= 0:
+                continue
+
             if strip_width > max_strip_width:
-                # This is probably not a thin scanner artifact.
                 continue
 
-            if end + white_run > limit:
-                continue
-
-            # The strip must be followed by consecutive white pixels.
+            # Require a white region immediately after the strip.
             following = profile[end:end + white_run]
 
-            if not np.all(following >= white_threshold):
+            if len(following) < white_run:
                 continue
 
-            # Do not accept a gray patch surrounded by other gray
-            # pixels on its outer side, when that outer side exists.
-            # A gray strip may legitimately start at the image edge.
-            if start > 0:
-                preceding = profile[start - 1]
-                if gray_min <= preceding <= gray_max:
-                    continue
+            white_fraction = np.mean(
+                following >= white_threshold
+            )
+
+            # Allow a small amount of noise in the white region.
+            if white_fraction < 0.875:
+                continue
 
             return start, end
 
         return None
 
+    # ------------------------------------------------------------
+    # 4. Detect artifacts independently on each edge.
     # Analyze every scanline perpendicular to the requested edge.
+    # ------------------------------------------------------------
+
+    cleanup_mask = np.zeros(
+        (h, w),
+        dtype=bool,
+    )
+
     for edge in edges:
+
+        edge_mask = np.zeros(
+            (h, w),
+            dtype=bool,
+        )
+
         edge_hits = 0
         edge_length = h if edge in ("left", "right") else w
 
@@ -1035,7 +1130,9 @@ def remove_gray_edge_artifacts(
 
             start, end = result
 
-            # Include the gray strip and an inner cleanup margin.
+            # Remove the gray shape plus a small margin inside
+            # the page, where antialiasing may have contaminated
+            # the white paper.
             clean_end = min(
                 end + cleanup_margin,
                 search_depth,
@@ -1043,36 +1140,45 @@ def remove_gray_edge_artifacts(
             )
 
             if edge == "left":
-                cleanup_mask[i, start:clean_end] = True
+                edge_mask[i, start:clean_end] = True
+
             elif edge == "right":
-                cleanup_mask[i, w-clean_end:w-start] = True
+                edge_mask[
+                    i,
+                    w-clean_end:w-start,
+                ] = True
+
             elif edge == "top":
-                cleanup_mask[start:clean_end, i] = True
+                edge_mask[start:clean_end, i] = True
+
             else:  # bottom
-                cleanup_mask[h-clean_end:h-start, i] = True
+                edge_mask[
+                    h-clean_end:h-start,
+                    i,
+                ] = True
 
             edge_hits += 1
 
-        # Avoid applying an edge cleanup based on a few isolated
-        # scanlines. If the feature is not sufficiently widespread,
-        # discard its detections for this edge.
-        if edge_hits < max(1, int(edge_length * min_edge_fraction)):
+        # Require a minimum number of successful scanlines.
+        min_hits = max(
+            1,
+            int(edge_length * min_edge_fraction),
+        )
+
+        if edge_hits < min_hits:
+
             if DEBUG:
                 print(
                     f"gray edge cleanup: {edge}: "
-                    f"only {edge_hits}/{edge_length} hits; skipped"
+                    f"only {edge_hits}/{edge_length} hits; "
+                    f"skipped"
                 )
 
-            if edge == "left":
-                cleanup_mask[:, :search_depth] = False
-            elif edge == "right":
-                cleanup_mask[:, max(0, w-search_depth):] = False
-            elif edge == "top":
-                cleanup_mask[:search_depth, :] = False
-            else:
-                cleanup_mask[max(0, h-search_depth):, :] = False
-
             continue
+
+        # Only add detections from this edge after it passes
+        # the minimum-hit requirement.
+        cleanup_mask |= edge_mask
 
         if DEBUG:
             print(
@@ -1080,12 +1186,28 @@ def remove_gray_edge_artifacts(
                 f"{edge_hits}/{edge_length} scanlines detected"
             )
 
-    # Paint the detected regions white. Preserve the alpha channel
-    # of BGRA images.
-    if image.ndim == 2:
+    # ------------------------------------------------------------
+    # 5. Replace detected pixels.
+    # ------------------------------------------------------------
+
+    if transparent:
+
+        # Transparent black is a convenient representation.
+        image[cleanup_mask, :3] = 0
+        image[cleanup_mask, 3] = 0
+
+    elif image.ndim == 2:
+
         image[cleanup_mask] = 255
-    else:
+
+    elif image.shape[2] == 3:
+
         image[cleanup_mask, :3] = 255
+
+    else:
+        # BGRA: white must also be fully opaque.
+        image[cleanup_mask, :3] = 255
+        image[cleanup_mask, 3] = 255
 
     return image
 
@@ -2499,9 +2621,10 @@ def process_image(in_path, out_path):
     # remove curved midgray scanner artifacts
 
     if CLEAN_GRAY_EDGE_ARTIFACTS:
-        warped = remove_gray_edge_artifacts(warped)
-
-
+        warped = remove_gray_edge_artifacts(
+            warped,
+            transparent=not remove_inside_transparent_strip,
+        )
 
     # # Add internal white border
     # h, w = warped.shape[:2]
@@ -2542,7 +2665,23 @@ def process_image(in_path, out_path):
     # 9. save
 
     if input_is_grayscale:
-        canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
+
+        keep_alpha = (
+            CLEAN_GRAY_EDGE_ARTIFACTS
+            and not remove_inside_transparent_strip
+        )
+
+        if not keep_alpha:
+            if canvas.ndim == 3 and canvas.shape[2] == 4:
+                canvas = cv2.cvtColor(
+                    canvas,
+                    cv2.COLOR_BGRA2GRAY,
+                )
+            else:
+                canvas = cv2.cvtColor(
+                    canvas,
+                    cv2.COLOR_BGR2GRAY,
+                )
 
     ensure_dir(out_path.parent)
     # cv2.imwrite(out_path, canvas, config.cv2_imwrite_params)
