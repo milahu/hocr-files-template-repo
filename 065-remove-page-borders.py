@@ -117,6 +117,26 @@ GRAY_CONTOUR_MAX_CANDIDATES = 8
 # Interpolate short gaps in the detected contour.
 GRAY_CONTOUR_MAX_INTERPOLATION_GAP = 8
 
+# Maximum distance to search into the page for a gray-to-white transition.
+GRAY_GRADIENT_MAX_WIDTH = 12
+
+# A pixel is considered white when all BGR channels reach this value.
+GRAY_GRADIENT_WHITE_THRESHOLD = 245
+
+# Maximum difference between the highest and lowest BGR channel.
+# This rejects transitions towards cyan, magenta, yellow, etc.
+GRAY_GRADIENT_NEUTRAL_TOLERANCE = 14
+
+# Allow small channel fluctuations caused by scan noise.
+GRAY_GRADIENT_MONOTONIC_TOLERANCE = 4
+
+# Number of consecutive white pixels required to confirm a white endpoint.
+GRAY_GRADIENT_WHITE_RUN = 3
+
+# Median-filter width along the edge.
+# This rejects isolated detections caused by printed dots or noise.
+GRAY_GRADIENT_MEDIAN_SIZE = 5
+
 
 
 import os
@@ -1744,8 +1764,23 @@ def remove_background_outside_page(
         255,
     )
 
-    # Remove everything outside the page.
-    outside = page_mask == 0
+    # -------------------------------------------------------------------------
+    # Detect gray-to-white scanner-background gradients.
+    # -------------------------------------------------------------------------
+
+    gradient_mask = build_white_gradient_mask(
+        image=image,
+        warped_edges=warped_edges,
+        cropped_edge=cropped_edge,
+        left_edge=left_edge,
+        right_edge=right_edge,
+    )
+
+    # Combine the original outside-page mask with the additional gradient.
+    outside = (
+        (page_mask == 0)
+        | (gradient_mask > 0)
+    )
 
     if transparent and image.ndim == 3 and image.shape[2] == 4:
         image[outside] = (0, 0, 0, 0)
@@ -1875,6 +1910,240 @@ def constrain_edge_points(
     result[:, value_axis] = constrained
 
     return result
+
+
+def detect_white_gradient_depth(
+        image,
+        x,
+        y,
+        dx,
+        dy,
+    ):
+    """
+    Detect a gray-to-white gradient extending inwards from a page edge.
+
+    Returns the number of pixels to remove, or zero if the transition
+    cannot confidently be identified as a gray-to-white transition.
+
+    dx, dy specify the inward direction.
+    """
+
+    h, w = image.shape[:2]
+
+    if not (0 <= x < w and 0 <= y < h):
+        return 0
+
+    profile = []
+
+    for distance in range(GRAY_GRADIENT_MAX_WIDTH + 1):
+
+        px = x + distance * dx
+        py = y + distance * dy
+
+        if not (0 <= px < w and 0 <= py < h):
+            break
+
+        pixel = image[py, px, :3].astype(np.float32)
+
+        profile.append(pixel)
+
+    if len(profile) < GRAY_GRADIENT_WHITE_RUN + 1:
+        return 0
+
+    profile = np.asarray(profile)
+
+    # The first pixel should still resemble scanner gray.
+    first = profile[0]
+
+    if first.max() - first.min() > GRAY_GRADIENT_NEUTRAL_TOLERANCE:
+        return 0
+
+    # Avoid treating an already-white edge as a gray gradient.
+    if first.mean() >= GRAY_GRADIENT_WHITE_THRESHOLD - 20:
+        return 0
+
+    # Every pixel in the gradient must remain approximately neutral.
+    channel_spread = profile.max(axis=1) - profile.min(axis=1)
+
+    if np.any(channel_spread > GRAY_GRADIENT_NEUTRAL_TOLERANCE):
+        return 0
+
+    # Find the first sustained white endpoint.
+    white_start = None
+
+    for i in range(
+        len(profile) - GRAY_GRADIENT_WHITE_RUN + 1
+    ):
+
+        white_run = profile[
+            i:i + GRAY_GRADIENT_WHITE_RUN
+        ]
+
+        if np.all(
+            white_run >= GRAY_GRADIENT_WHITE_THRESHOLD
+        ):
+            white_start = i
+            break
+
+    if white_start is None:
+        return 0
+
+    # Check that all three channels move towards white.
+    #
+    # This is important: a transition towards a colored printed
+    # region must not be mistaken for scanner background.
+    gradient = profile[:white_start + 1]
+
+    differences = np.diff(
+        gradient,
+        axis=0,
+    )
+
+    if np.any(
+        differences < -GRAY_GRADIENT_MONOTONIC_TOLERANCE
+    ):
+        return 0
+
+    # The endpoint must be substantially brighter than the starting point.
+    if (
+        gradient[-1].mean() - gradient[0].mean()
+        < 20
+    ):
+        return 0
+
+    # Remove the gradient, but preserve the confirmed white page area.
+    return white_start
+
+
+def build_white_gradient_mask(
+        image,
+        warped_edges,
+        cropped_edge,
+        left_edge,
+        right_edge,
+    ):
+    """
+    Build an additional mask for gray-to-white scanner-background gradients.
+
+    Only confidently detected gray-to-white transitions are included.
+    """
+
+    h, w = image.shape[:2]
+
+    gradient_mask = np.zeros(
+        (h, w),
+        dtype=np.uint8,
+    )
+
+    edge_specs = [
+        # edge, sort axis, inward dx, inward dy
+        (EDGE_TOP,    0,  0,  1),
+        (EDGE_BOTTOM, 0,  0, -1),
+        (left_edge,   1,  1,  0),
+        (right_edge,  1, -1,  0),
+    ]
+
+    for edge, sort_axis, dx, dy in edge_specs:
+
+        # Never clean the scanner-cropped edge.
+        if edge == cropped_edge:
+            continue
+
+        points = warped_edges.get(edge)
+
+        if points is None or len(points) < 2:
+            continue
+
+        order = np.argsort(points[:, sort_axis])
+        points = points[order]
+
+        depths = np.zeros(
+            len(points),
+            dtype=np.int32,
+        )
+
+        valid_points = np.zeros(
+            len(points),
+            dtype=bool,
+        )
+
+        # Inspect the color profile at each detected edge position.
+        for i, point in enumerate(points):
+
+            x = int(round(point[0]))
+            y = int(round(point[1]))
+
+            if not (0 <= x < w and 0 <= y < h):
+                continue
+
+            valid_points[i] = True
+
+            depths[i] = detect_white_gradient_depth(
+                image,
+                x,
+                y,
+                dx,
+                dy,
+            )
+
+        # Smooth removal depths along the edge.
+        #
+        # This prevents individual printed dots or noisy pixels from
+        # producing isolated extensions into the page.
+        radius = GRAY_GRADIENT_MEDIAN_SIZE // 2
+
+        padded = np.pad(
+            depths,
+            (radius, radius),
+            mode="edge",
+        )
+
+        smoothed = np.array([
+            np.median(
+                padded[i:i + GRAY_GRADIENT_MEDIAN_SIZE]
+            )
+            for i in range(len(depths))
+        ], dtype=np.int32)
+
+        # Build a strip polygon between the detected edge and the
+        # confirmed white endpoint.
+        outer = []
+        inner = []
+
+        for i, point in enumerate(points):
+
+            if not valid_points[i]:
+                continue
+
+            depth = smoothed[i]
+
+            if depth <= 0:
+                continue
+
+            x = int(round(point[0]))
+            y = int(round(point[1]))
+
+            outer.append([x, y])
+            inner.append([
+                x + depth * dx,
+                y + depth * dy,
+            ])
+
+        if len(outer) < 2:
+            continue
+
+        polygon = np.asarray(
+            outer + inner[::-1],
+            dtype=np.int32,
+        )
+
+        cv2.fillPoly(
+            gradient_mask,
+            [polygon],
+            255,
+        )
+
+    return gradient_mask
 
 
 def process_image(in_path, out_path):

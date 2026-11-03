@@ -2,8 +2,8 @@
 
 **User:** Anonymous  
 **Created:** 2026/11/3 15:26:05  
-**Updated:** 2026/11/3 17:45:00  
-**Exported:** 2026/11/3 17:46:46  
+**Updated:** 2026/11/3 18:05:03  
+**Exported:** 2026/11/3 18:05:08  
 **Link:** [<https://chatgpt.com/c/6ae9eefc-3e68-83ed-b58d-1c84020b52a7>](https://chatgpt.com/c/6ae9eefc-3e68-83ed-b58d-1c84020b52a7)
 
 ## Prompt:
@@ -11987,6 +11987,1727 @@ You can now delete `cleanup_transparent_inner_edge()` entirely.
 This also avoids accidentally cropping valid page content because of a transparent pixel somewhere along the top, bottom, or outside edge.
 
 One important detail: this assumes 065 has already removed the crooked inner-edge strip and that its remaining transparency is exclusively outside the page. Based on the pipeline we've been working on, that is the intended arrangement.
+
+## Prompt:
+
+11/3/2026, 5:57:32 PM
+
+ok, now back to my 065 script. this is almost perfect....
+
+but currently, removing the midgray scanner background is a bit too ungreedy, so slim lines (about 2 pixels wide) of the midgray scanner background can still be visible in the output image. ideally, the script should remove the midgray scanner background completely
+
+the obvious risk here is the removal of page content. to reduce this risk, i want the script to search for the gradient from the midgray scanner background to the white background of the page, and remove the whole gradient up to the white page background. this is different from page content, because page content (with borderless printing) would produce a gradient from the midgray scanner background to some non-white color (solid black or dotted black or solid cyan/magenta/yellow or dotted cyan/magenta/yellow) -- in that case the script should remove only the solid midgray area outside of the page and err on the side of keeping too many gray pixels (opposed to removing too many gray pixels)
+
+so i assume we do have to re-scan the 3 page edges... but we can make this faster by re-using the already-detected points (top_pts, bottom_pts, outside_pts, inside_pts)
+
+## Response:
+
+11/3/2026, 5:57:40 PM
+
+> **Refining boundary cleanup**
+>
+> I’m considering profile-based refinement: sample inward from each transformed edge point, detect the gray-to-white transition, and move the boundary only when the interior reaches near-white. I need the exact image-coordinate conventions before writing reliable code.
+>
+> **Refining edge strips**
+>
+> I’m extending each detected edge inward along its local normal, then removing only a short region where RGB values rise toward stable near-white. Dark or colored content won’t qualify, so real page marks remain intact.
+>
+> Worked for 9s
+
+Yes — I think this is the right next improvement. The important change is to distinguish **the scanner-background plateau** from **the transition between scanner gray and the page**.
+
+At the moment, the cleanup is apparently stopping a little too early. We should extend the removal into the transition, but only when the transition is heading towards white. If it is heading towards a non-white page color, we should stop conservatively and preserve those pixels.
+
+I would implement this as a second pass in 065, after the geometric transformation and before saving:
+
+1.  Reuse `top_pts`, `bottom_pts`, `outside_pts` and `inside_pts` — no need to run edge detection again.
+2.  Transform those points using the existing `Mrot` and `M`, just as in the current cleanup.
+3.  Sample image colors moving **inwards from each detected page boundary**.
+4.  Identify the midgray scanner-background plateau and its transition.
+5.  Extend the transparent mask through the transition only if the pixels are converging towards white.
+6.  If the transition appears to converge towards a non-white color, stop at the solid gray boundary. When uncertain, keep the pixels.
+
+One detail matters: we should not simply look for a gradient with increasing brightness. A gradient towards cyan, magenta, yellow, or black can also change brightness. We need to consider the color channels, and ideally compare the transition against a neutral white endpoint.
+
+### The important safety rule
+
+I would use a deliberately strict test:
+
+| Scanner-to-page transition | Action |
+|----|----|
+| Midgray → lighter gray → white | Remove the entire transition |
+| Midgray → darker gray → black | Keep the transition |
+| Midgray → cyan | Keep the transition |
+| Midgray → magenta | Keep the transition |
+| Midgray → yellow | Keep the transition |
+| Midgray → irregular/dotted color | Keep the transition unless a clearly white endpoint is established |
+| Ambiguous transition | Keep the pixels |
+
+In particular, I would **not** use a simple brightness threshold. A cyan, magenta or yellow transition can have increasing brightness in some channels while still being printed content.
+
+### How I would detect the white gradient
+
+For each location along an edge, sample a short profile extending into the page. For example:
+
+<box border radius="lg" padding={3} gap={2}>
+  <title size="md">Illustrative pixel profile</title>
+  <row gap={1} height="38px">
+    {#each ["#b0b0b0","#b5b5b5","#c0c0c0","#d0d0d0","#e2e2e2","#f1f1f1","#fafafa","#ffffff"] as c,i}
+      <box flex="1" background={c} radius="xs" align="center" justify="center">
+        <text color={i<5?"#222":"#222"} size="xs">{i+1}</text>
+      </box>
+    {/each}
+  </row>
+  <row justify="between">
+    <caption>Scanner gray</caption>
+    <caption>White page</caption>
+  </row>
+  <text color="success" weight="medium" size="sm">Remove the gray-to-white transition.</text>
+  <divider color="subtle"/>
+  <row gap={1} height="38px">
+    {#each ["#b0b0b0","#a0a0a0","#858585","#626262","#383838","#171717","#080808","#000000"] as c,i}
+      <box flex="1" background={c} radius="xs" align="center" justify="center">
+        <text color={i<4?"#fff":"#fff"} size="xs">{i+1}</text>
+      </box>
+    {/each}
+  </row>
+  <row justify="between">
+    <caption>Scanner gray</caption>
+    <caption>Black content</caption>
+  </row>
+  <text color="success" weight="medium" size="sm">Keep the transition: it is potentially printed content.</text>
+</box>
+
+I would make the decision using three checks:
+
+- **Neutrality:** the transition should remain approximately neutral gray, rather than developing a color cast.
+- **Direction:** all three RGB channels should move towards white, not merely increase in overall brightness.
+- **Endpoint:** the profile should actually reach a sufficiently white region, preferably remaining white for several consecutive pixels.
+
+There is another important safeguard: evaluate a small neighborhood along the edge, not just individual pixels. A printed halftone dot could otherwise look like an isolated gray-to-white transition. Requiring the white-gradient behavior to be consistent across neighboring profiles makes accidental removal of printed content much less likely.
+
+### Reusing your existing detections
+
+We can reuse all four existing point arrays:
+
+- `top_pts`
+- `bottom_pts`
+- `outside_pts`
+- `inside_pts`
+
+There is no need to run `detect_edge_points()` again. We transform the existing points into output-image coordinates and use them as sampling locations for the profiles.
+
+I would keep the existing geometric cleanup unchanged and add this as a **conservative refinement of its transparent mask**. That way, the new operation can only remove a little more scanner background; it cannot change the deskew or page geometry.
+
+One thing I'd like to get right before writing the actual code: **could you paste the current versions of `remove_background_outside_page()` and the section of 065 where you call it?** I want to integrate the gradient detection into your working version rather than give you another replacement that makes assumptions about its current coordinate handling.
+
+## Prompt:
+
+11/3/2026, 5:59:48 PM
+
+
+    def remove_background_outside_page(
+            image,
+            edge_points,
+            Mrot,
+            M,
+            bad_on_left,
+            scan_top_edge,
+            transparent=False,
+            crop_offset_x=0,
+        ):
+        """
+        Remove scanner background outside the detected page boundary.
+
+        The three visible page edges follow their detected curves.
+        The edge specified by scan_top_edge is left untouched and
+        represented by the corresponding output-image boundary.
+
+        edge_points contains original-image coordinates.
+        Mrot maps original -> rotated.
+        M maps rotated -> perspective-corrected output.
+        """
+
+        h, w = image.shape[:2]
+
+        inside_edge = EDGE_LEFT if bad_on_left else EDGE_RIGHT
+        outside_edge = EDGE_RIGHT if bad_on_left else EDGE_LEFT
+
+        # Map the physical edges to the four sides of the output image.
+        left_edge = inside_edge if bad_on_left else outside_edge
+        right_edge = outside_edge if bad_on_left else inside_edge
+
+        cropped_edge = {
+            "top": EDGE_TOP,
+            "bottom": EDGE_BOTTOM,
+            "inside": inside_edge,
+            "outside": outside_edge,
+        }.get(scan_top_edge)
+
+        if cropped_edge is None:
+            raise ValueError(
+                f"Invalid config.scan_top_edge: {scan_top_edge!r}"
+            )
+
+        # Transform all available original-image edge points into
+        # final output coordinates.
+        warped_edges = {}
+
+        for edge, pts in edge_points.items():
+            pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
+
+            if len(pts) < 2:
+                continue
+
+            pts_rotated = cv2.transform(
+                pts.reshape(-1, 1, 2),
+                Mrot,
+            )
+
+            pts_warped = cv2.perspectiveTransform(
+                pts_rotated,
+                M,
+            ).reshape(-1, 2)
+
+            # The inside-strip removal, if enabled, crops the left
+            # or right side of the already-warped image.
+            pts_warped[:, 0] -= crop_offset_x
+
+            pts_warped = pts_warped[
+                np.isfinite(pts_warped).all(axis=1)
+            ]
+
+            if len(pts_warped) >= 2:
+                warped_edges[edge] = pts_warped
+
+        # Return a detected curve in the required order, or None
+        # if that edge was cropped or could not be detected.
+        def get_curve(edge, sort_axis, reverse=False):
+            if edge == cropped_edge:
+                return None
+
+            pts = warped_edges.get(edge)
+
+            if pts is None or len(pts) < 2:
+                return None
+
+            order = np.argsort(pts[:, sort_axis])
+
+            if reverse:
+                order = order[::-1]
+
+            return pts[order]
+
+        # The four output-image corners.
+        tl = np.array([0, 0], dtype=np.float32)
+        tr = np.array([w - 1, 0], dtype=np.float32)
+        br = np.array([w - 1, h - 1], dtype=np.float32)
+        bl = np.array([0, h - 1], dtype=np.float32)
+
+        # Build the polygon clockwise.
+        # A missing/cropped edge is represented by the corresponding
+        # output-image border.
+        top = get_curve(EDGE_TOP, sort_axis=0)
+        right = get_curve(right_edge, sort_axis=1)
+        bottom = get_curve(EDGE_BOTTOM, sort_axis=0, reverse=True)
+        left = get_curve(left_edge, sort_axis=1, reverse=True)
+
+        def make_side(start, end, curve):
+            if curve is None:
+                return np.asarray([start, end], dtype=np.float32)
+
+            return np.vstack([
+                start,
+                curve,
+                end,
+            ])
+
+        polygon = np.vstack([
+            make_side(tl, tr, top),
+            make_side(tr, br, right)[1:],
+            make_side(br, bl, bottom)[1:],
+            make_side(bl, tl, left)[1:],
+        ])
+
+        polygon = np.round(polygon).astype(np.int32)
+
+        # Fill the page area.
+        page_mask = np.zeros((h, w), dtype=np.uint8)
+
+        cv2.fillPoly(
+            page_mask,
+            [polygon],
+            255,
+        )
+
+        # Remove everything outside the page.
+        outside = page_mask == 0
+
+        if transparent and image.ndim == 3 and image.shape[2] == 4:
+            image[outside] = (0, 0, 0, 0)
+        else:
+            if image.ndim == 2:
+                image[outside] = 255
+            elif image.shape[2] == 4:
+                image[outside] = (255, 255, 255, 255)
+            else:
+                image[outside] = (255, 255, 255)
+
+        return image
+
+called from the process_image function:
+
+    def process_image(in_path, out_path):
+        """
+        Robust page extraction that handles missing top (or bottom) edges.
+        - preserves original colors (warps the original image)
+        - builds orthogonal axes (no shear)
+        - if top is missing, uses bottom + good vertical to infer top by moving up expected_h
+        - fills outside the filled page polygon with pure white
+        - extensive debug output in OUTPUT_DIR/debug/<page_num>/
+        """
+        # ---------- start ----------
+
+        if DEBUG: print() # end line of tqdm progress bar
+
+        # 1. load image
+
+        fname = in_path.name
+        m = re.match(r"^(\d+)", fname)
+        page_num = int(m.group(1)) if m else 0
+        bad_on_left = (page_num % 2 == 1)
+
+        img = cv2.imread(in_path, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            print("Failed to read", in_path); return
+        input_is_grayscale = (len(img.shape) == 2)
+        if len(img.shape) == 2:
+            # OpenCV expects 3-channel images for many operations
+            # later convert back to grayscale
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        H_img, W_img = img.shape[:2]
+
+        # fixed
+        # # FIXME wrong H_img?
+        # expected_w = int(round(ASPECT * H_img))
+        # expected_h = H_img
+
+        # dbgdir = OUTPUT_DIR.joinpath("debug", f"{page_num:03d}")
+        # if DEBUG: ensure_dir(dbgdir)
+
+    # 2. calculate search margins
+
+        # Compute the expected ranges of margins
+        # NOTE the scanner removes the "scan top" margin
+        # so in the X direction, we have only one margin
+        # so here we divide by 4, not by 2
+        edge_search_width_mm = (
+            config.rotated_margined_scan_x -
+            config.rotated_scan_x
+        ) / 4.0
+        edge_search_height_mm = (
+            config.rotated_margined_scan_y -
+            config.rotated_scan_y
+        ) / 2.0
+
+        if DEBUG:
+            print(f"config.rotated_margined_scan: ({config.rotated_margined_scan_x}, {config.rotated_margined_scan_y}) mm")
+            print(f"config.rotated_scan: ({config.rotated_scan_x}, {config.rotated_scan_y}) mm")
+            print(f"margin_range: ({edge_search_width_mm}, {edge_search_height_mm}) mm")
+
+        # Convert them to pixels
+        edge_search_width_px = px_of_mm(
+            edge_search_width_mm,
+            config.scan_resolution
+        )
+        edge_search_height_px = px_of_mm(
+            edge_search_height_mm,
+            config.scan_resolution
+        )
+
+        # TODO rename, move to config
+
+        SEARCH_MARGIN_FACTOR = 2.0
+        SEARCH_MARGIN_ADD_MM = 5
+
+        SEARCH_MARGIN_FACTOR = 1.2
+        SEARCH_MARGIN_ADD_MM = 2
+
+        # debug: dont increase
+        # SEARCH_MARGIN_FACTOR = 1; SEARCH_MARGIN_ADD_MM = 0
+
+        # Then enlarge them
+        edge_search_width_px *= SEARCH_MARGIN_FACTOR
+        edge_search_height_px *= SEARCH_MARGIN_FACTOR
+        search_margin_add_px = px_of_mm(
+            SEARCH_MARGIN_ADD_MM,
+            config.scan_resolution
+        )
+        edge_search_width_px += search_margin_add_px
+        edge_search_height_px += search_margin_add_px
+
+        # we need integers for array indices
+        edge_search_width_px = int(math.ceil(edge_search_width_px))
+        edge_search_height_px = int(math.ceil(edge_search_height_px))
+
+    # 3. build mask
+
+        # Step 1: Segment page vs. gray background
+        # -> gray, mask
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # Otsu is usually sufficient here
+        _, page_mask = cv2.threshold(
+            gray,
+            0,
+            255,
+            cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )
+
+        # Page should be white
+        if np.mean(gray[page_mask == 255]) < np.mean(gray[page_mask == 0]):
+            page_mask = cv2.bitwise_not(page_mask)
+
+        page_mask = cv2.morphologyEx(
+            page_mask,
+            cv2.MORPH_CLOSE,
+            np.ones((5,5), np.uint8)
+        )
+
+    # TODO rename
+        mask = page_mask
+
+    # Step 2: Scan for transitions
+        # Step 3: Transition verification
+
+        # NOTE we ignore inside_pts because
+        # - guillotine cutter can produce non-orthogonal inside edge of the book
+        # - document scanner does remove the top edge of the scan
+        # if config.do_rotate is True then
+        # "inside edge of the book" == "top edge of the scan"
+        #
+        # this also means:
+        # the widths of the top and bottom edges
+        # must have no influence on the deskew step
+        # (deskew = Rotation + Perspective transform)
+
+        # Expected horizontal margin between the page and scan boundary.
+        expected_horizontal_margin_mm = (
+            config.margined_scan_width_mm
+            - config.unbinded_page_width_mm
+        ) / 2.0
+        expected_horizontal_margin_px = int(round(
+            expected_horizontal_margin_mm
+            * W_img
+            / config.margined_scan_width_mm
+        ))
+        # Search up to 2x the expected margin from the relevant image side.
+        vertical_edge_search_size = min(
+            W_img,
+            max(1, 2 * expected_horizontal_margin_px),
+        )
+
+        # if bad_on_left:
+        #     outside_pts = detect_edge_points(
+        #         gray,
+        #         mask,
+        #         EDGE_RIGHT,
+        #         edge_search_width_px,
+        #     )
+        # else:
+        #     outside_pts = detect_edge_points(
+        #         gray,
+        #         mask,
+        #         EDGE_LEFT,
+        #         edge_search_width_px,
+        #     )
+        outside_edge = EDGE_RIGHT if bad_on_left else EDGE_LEFT
+
+        outside_pts = detect_edge_points(
+            gray,
+            mask,
+            outside_edge,
+            vertical_edge_search_size,
+        )
+
+        inside_edge = EDGE_LEFT if bad_on_left else EDGE_RIGHT
+
+        inside_pts = None
+
+        # Detect the inside edge whenever it is not the scanner-cropped edge.
+        # It is needed for cleanup even when it is not used for deskew.
+        if config.scan_top_edge != "inside":
+            if DEBUG:
+                print(
+                    f"{in_path}: detecting inside edge; "
+                    f"search width={vertical_edge_search_size}px"
+                )
+
+            inside_pts = detect_edge_points(
+                gray,
+                mask,
+                inside_edge,
+                vertical_edge_search_size,
+            )
+
+            if DEBUG: print(f"{in_path}: len(inside_pts) before reject_outliers_vertical: {len(inside_pts)}")
+            inside_pts = reject_outliers_vertical(inside_pts)
+            if DEBUG: print(f"{in_path}: len(inside_pts) after reject_outliers_vertical: {len(inside_pts)}")
+
+            if DEBUG:
+                print(f"{in_path}: len(inside_pts) = {len(inside_pts)}")
+        else:
+            if DEBUG:
+                print(f"{in_path}: inside edge is scanner-cropped")
+
+    # The normal detector can fail when the physical page edge is
+        # visually weak, but the page mask still gives us its boundary.
+        if len(outside_pts) < RANSAC_MIN_INLIERS:
+            if DEBUG: print("detect_edge_points failed to detect enough outside_pts -> using fallback")
+            ys, xs = np.nonzero(mask > 0)
+
+            if outside_edge == EDGE_LEFT:
+                x_edge = xs.min() if len(xs) else None
+                if x_edge is not None:
+                    fallback_pts = np.column_stack([
+                        np.full(len(ys), x_edge),
+                        ys,
+                    ])
+                else:
+                    fallback_pts = np.empty((0, 2))
+            else:
+                x_edge = xs.max() if len(xs) else None
+                if x_edge is not None:
+                    fallback_pts = np.column_stack([
+                        np.full(len(ys), x_edge),
+                        ys,
+                    ])
+                else:
+                    fallback_pts = np.empty((0, 2))
+            if len(fallback_pts) >= RANSAC_MIN_INLIERS:
+                outside_pts = fallback_pts
+
+        top_pts = detect_edge_points(
+            gray,
+            mask,
+            EDGE_TOP,
+            edge_search_height_px,
+        )
+
+        bottom_pts = detect_edge_points(
+            gray,
+            mask,
+            EDGE_BOTTOM,
+            edge_search_height_px,
+        )
+
+    # 4. reject outliers
+
+        # Step 4: Reject isolated outliers
+        # Use a median filter before RANSAC.
+
+        top_pts = reject_outliers_horizontal(top_pts)
+        bottom_pts = reject_outliers_horizontal(bottom_pts)
+        outside_pts = reject_outliers_vertical(outside_pts)
+
+    # Preserve the detected boundaries for final gray-background cleanup.
+        # These are the filtered raw points, not RANSAC inliers.
+
+        top_pts = constrain_edge_points(
+            top_pts, EDGE_TOP,
+            max_angle_deg=2.0,
+            max_deviation_px=3.0,
+        )
+
+        bottom_pts = constrain_edge_points(
+            bottom_pts, EDGE_BOTTOM,
+            max_angle_deg=2.0,
+            max_deviation_px=3.0,
+        )
+
+        outside_pts = constrain_edge_points(
+            outside_pts, outside_edge,
+            max_angle_deg=2.0,
+            max_deviation_px=3.0,
+        )
+
+        if inside_pts is not None:
+            inside_pts = constrain_edge_points(
+                inside_pts, inside_edge,
+                max_angle_deg=2.0,
+                max_deviation_px=3.0,
+            )
+
+        cleanup_edge_pts = {
+            EDGE_TOP: top_pts.copy(),
+            EDGE_BOTTOM: bottom_pts.copy(),
+            outside_edge: outside_pts.copy(),
+        }
+
+        if inside_pts is not None:
+            cleanup_edge_pts[inside_edge] = inside_pts.copy()
+
+    inside_line = None
+
+        if (
+            not config.use_three_edge_deskew
+            and config.scan_top_edge == "top"
+        ):
+            if DEBUG: print(f"{in_path}: getting inside_line with fit_line_ransac_or_none")
+            inside_line = fit_line_ransac_or_none(inside_pts)
+        else:
+            if DEBUG: print(f"{in_path}: not getting inside_line")
+
+        # 5. fit lines
+        #
+        # Normally we have three visible page edges:
+        #
+        #     top
+        #     bottom
+        #     outside
+        #
+        # However, when the page is almost as large as the scanner's maximum
+        # scan width, the scanner can crop one of top/bottom completely.
+        #
+        # In that case a missing horizontal edge is NOT an error.
+        # We can still deskew using:
+        #
+        #     outside + top
+        #
+        # or:
+        #
+        #     outside + bottom
+        #
+        # The missing edge is then represented by the corresponding image
+        # boundary later in the perspective transform.
+
+        if DEBUG: print(f"fit_line_ransac_or_none(top_pts) # len(top_pts) = {len(top_pts)}")
+        if DEBUG: t1 = time.time()
+        top_line = fit_line_ransac_or_none(top_pts)
+        if DEBUG: print(f"fit_line_ransac_or_none: done in {time.time() - t1:.3f} seconds")
+
+        if DEBUG: print(f"fit_line_ransac_or_none(bottom_pts) # len(bottom_pts) = {len(bottom_pts)}")
+        if DEBUG: t1 = time.time()
+        bottom_line = fit_line_ransac_or_none(bottom_pts)
+        if DEBUG: print(f"fit_line_ransac_or_none: done in {time.time() - t1:.3f} seconds")
+
+        # FIXME this takes too long because we have too many outside_pts
+        # len(inside_pts) = 5277
+        # len(bottom_pts) = 3481
+        # len(outside_pts) = 17742474
+        if DEBUG: print(f"fit_line_ransac_or_none(outside_pts) # len(outside_pts) = {len(outside_pts)}")
+        if DEBUG: t1 = time.time()
+        outside_line = fit_line_ransac_or_none(outside_pts)
+        if DEBUG: print(f"fit_line_ransac_or_none: done in {time.time() - t1:.3f} seconds")
+
+        if 0:
+            # make RANSAC less strict
+            if DEBUG: print("fit_line_ransac_or_none(outside_pts) # less strict")
+            outside_line = fit_line_ransac_or_none(
+                outside_pts,
+                iterations=RANSAC_ITER,
+                inlier_dist=RANSAC_INLIER_DIST * 2,
+                min_inliers=10,
+            )
+
+        if outside_line is None:
+            raise ValueError(
+                f"Could not detect outside page edge "
+                f"(page {page_num}); "
+                f"detected {len(outside_pts)} candidate points"
+            )
+
+        if top_line is None and bottom_line is None:
+            raise ValueError(
+                f"Could not detect either top or bottom page edge "
+                f"(page {page_num}); need at least one horizontal edge"
+            )
+
+        if DEBUG:
+            print(
+                f"page {page_num}: detected edges:",
+                f"top={'yes' if top_line is not None else 'NO'}",
+                f"bottom={'yes' if bottom_line is not None else 'NO'}",
+                f"outside={'yes' if outside_line is not None else 'NO'}",
+                f"inside={'yes' if inside_line is not None else 'NO'}",
+            )
+
+        missing_top = top_line is None
+        missing_bottom = bottom_line is None
+
+    if 0:
+            # debug
+            # float(vx), float(vy), float(x0), float(y0)
+            print(f"top_line={top_line}")
+            print(f"bottom_line={bottom_line}")
+            print(f"outside_line={outside_line}")
+
+    # page margin
+        # Intersections with the detected horizontal edges.
+        #
+        # If one edge is missing, we use the corresponding image boundary
+        # as the page edge. This is intentional: the scanner has already
+        # cropped that edge, so extrapolating the page would manufacture
+        # pixels that do not exist.
+
+        if top_line is not None:
+            if DEBUG: print("outside_top = intersect_lines(...)")
+            outside_top = intersect_lines(
+                outside_line,
+                top_line,
+            )
+        else:
+            if DEBUG: print("outside_top = intersect_line_with_horizontal_boundary(...)")
+            outside_top = intersect_line_with_horizontal_boundary(
+                outside_line,
+                0.0,
+            )
+
+        if bottom_line is not None:
+            if DEBUG: print("outside_bottom = intersect_lines(...)")
+            outside_bottom = intersect_lines(
+                outside_line,
+                bottom_line,
+            )
+        else:
+            if DEBUG: print("outside_bottom = intersect_line_with_horizontal_boundary(...)")
+            outside_bottom = intersect_line_with_horizontal_boundary(
+                outside_line,
+                float(H_img - 1),
+            )
+
+    # also calculate inside_top and inside_bottom
+        # inside_line is simply the inside edge of the source image
+        # y1 = 0; y2 = y_max
+        # on odd pages: x1 = x2 = 0 # inside is left
+        # on even pages: x1 = x2 = x_max # inside is right
+        if bad_on_left:
+            # Odd page:
+            # binding/inside edge is the LEFT image boundary
+            inside_x = 0.0
+        else:
+            # Even page:
+            # binding/inside edge is the RIGHT image boundary
+            inside_x = float(W_img - 1)
+
+        if top_line is not None:
+            if DEBUG: print("inside_top = intersect_line_with_vertical_boundary(...)")
+            inside_top = intersect_line_with_vertical_boundary(
+                top_line,
+                inside_x,
+            )
+        else:
+            # Missing top page edge: preserve the top image boundary.
+            inside_top = np.array(
+                [inside_x, 0.0],
+                dtype=np.float32,
+            )
+
+        if bottom_line is not None:
+            if DEBUG: print("inside_bottom = intersect_line_with_vertical_boundary(...)")
+            inside_bottom = intersect_line_with_vertical_boundary(
+                bottom_line,
+                inside_x,
+            )
+        else:
+            # Missing bottom page edge: preserve the bottom image boundary.
+            inside_bottom = np.array(
+                [inside_x, float(H_img - 1)],
+                dtype=np.float32,
+            )
+
+    if DEBUG:
+            vis = img.copy()
+            # margin range
+            if bad_on_left:
+                # outside edge is right
+                # no line on the left
+                if 0:
+                    # Wr, Hr
+                    pts = np.array([
+                        [0, edge_search_height_px], # top left
+                        [Wr - edge_search_width_px, edge_search_height_px], # top right
+                        [Wr - edge_search_width_px, Hr - edge_search_height_px], # bottom right
+                        [0, Hr - edge_search_height_px], # bottom left
+                    ], np.int32)
+                else:
+                    # W_img, H_img
+                    pts = np.array([
+                        [0, edge_search_height_px], # top left
+                        [W_img - edge_search_width_px, edge_search_height_px], # top right
+                        [W_img - edge_search_width_px, H_img - edge_search_height_px], # bottom right
+                        [0, H_img - edge_search_height_px], # bottom left
+                    ], np.int32)
+            else:
+                # outside edge is left
+                # no line on the right
+                if 0:
+                    # Wr, Hr
+                    pts = np.array([
+                        [Wr, edge_search_height_px], # top right
+                        [edge_search_width_px, edge_search_height_px], # top left
+                        [edge_search_width_px, Hr - edge_search_height_px], # bottom left
+                        [Wr, Hr - edge_search_height_px], # bottom right
+                    ], np.int32)
+                else:
+                    # W_img, H_img
+                    pts = np.array([
+                        [W_img, edge_search_height_px], # top right
+                        [edge_search_width_px, edge_search_height_px], # top left
+                        [edge_search_width_px, H_img - edge_search_height_px], # bottom left
+                        [W_img, H_img - edge_search_height_px], # bottom right
+                    ], np.int32)
+            cv2.polylines(vis, [pts], False, (0,255,0), 3) # green
+
+            # Margin range
+            if 0:
+                # expand the binding edge to expected_w
+                if bad_on_left:
+                    # outside edge is the RIGHT edge
+                    x1_top = outside_top[0]
+                    x1_bottom = outside_bottom[0]
+                    x0_top = x1_top - expected_w
+                    x0_bottom = x1_bottom - expected_w
+                else:
+                    # outside edge is the LEFT edge
+                    x0_top = outside_top[0]
+                    x0_bottom = outside_bottom[0]
+                    x1_top = x0_top + expected_w
+                    x1_bottom = x0_bottom + expected_w
+            else:
+                # dont expand the binding edge to expected_w
+                # use only the detected page edges
+                if bad_on_left:
+                    # outside edge is right
+                    x1_top = outside_top[0]
+                    x1_bottom = outside_bottom[0]
+                    # binding edge
+                    # find leftmost detected page boundary
+                    # x0_top = np.min(top_pts[:,0])
+                    # x0_bottom = np.min(bottom_pts[:,0])
+                    x0_top = 0
+                    x0_bottom = 0
+                else:
+                    # outside edge is left
+                    x0_top = outside_top[0]
+                    x0_bottom = outside_bottom[0]
+                    # binding edge
+                    # find rightmost detected page boundary
+                    # x1_top = np.max(top_pts[:,0])
+                    # x1_bottom = np.max(bottom_pts[:,0])
+                    if 0:
+                        # Wr, Hr
+                        x1_top = Wr - 1
+                        x1_bottom = Wr - 1
+                    else:
+                        # W_img, H_img
+                        x1_top = W_img - 1
+                        x1_bottom = W_img - 1
+
+            # Detected page quadrilateral
+            if 0:
+                pts = np.array([
+                    # top left: bad: y=outside_top[1] is wrong
+                    # this would have to be min(top_line) or so
+                    [x0_top, outside_top[1]], # top left
+                    [x1_top, outside_top[1]], # top right: good
+                    [x1_bottom, outside_bottom[1]], # bottom right: good
+                    [x0_bottom, outside_bottom[1]], # bottom left: bad: y=outside_bottom[1] is wrong
+                ], np.int32)
+            elif 0:
+                pts = np.array([
+                    [x0_top, outside_top[1]],
+                    [x1_top, outside_top[1]],
+                    [x1_bottom, outside_bottom[1]],
+                    [x0_bottom, outside_bottom[1]],
+                ], np.int32)
+            elif 1:
+                pts = np.round(np.array([
+                    inside_top,
+                    outside_top,
+                    outside_bottom,
+                    inside_bottom,
+                ], dtype=np.float32)).astype(np.int32)
+            cv2.polylines(vis, [pts], True, (0,0,255), 3) # red
+
+            name = OUTPUT_DIR / f"{page_num:03d}.line-0900-fit-lines-ransac.tiff"
+            # print(f"writing {name}")
+            save_image(name, vis)
+
+        src_corners = np.float32([
+            inside_top,
+            outside_top,
+            outside_bottom,
+            inside_bottom,
+        ])
+
+    # FIXME merge old code with new code
+
+    # # TODO remove
+
+        # gray, mask, contours = get_gray_mask_contours(img, dbgdir)
+
+        # if not contours:
+        #     print(f"Warning: no contours found in {in_path}")
+        #     return
+
+        # page_contour = max(contours, key=cv2.contourArea)
+
+        cleanup_crop_offset_x = 0
+
+        if config.use_three_edge_deskew:
+
+            if DEBUG: print("config.use_three_edge_deskew == True")
+
+            # top_pts, bottom_pts, outside_pts = split_edge_candidates(
+            #     page_contour,
+            #     bad_on_left
+            # )
+
+            # top_line = fit_line_ransac(top_pts)[:4]
+            # bottom_line = fit_line_ransac(bottom_pts)[:4]
+            # outside_line = fit_line_ransac(outside_pts)[:4]
+
+    # 6. rotate
+            # deskew part 1
+
+            # old
+            # top_angle = math.degrees(line_angle(top_line))
+            # bottom_angle = math.degrees(line_angle(bottom_line))
+            # outside_angle = math.degrees(line_angle(outside_line))
+
+            if DEBUG:
+                # start debug prints
+                print()
+                print(f"line 570: page_num={page_num}")
+
+            top_angle = (
+                horizontal_line_angle(top_line)
+                if top_line is not None
+                else None
+            )
+
+            bottom_angle = (
+                horizontal_line_angle(bottom_line)
+                if bottom_line is not None
+                else None
+            )
+
+            outside_angle = vertical_line_angle(outside_line)
+
+            rotation_errors = [
+                outside_angle - 90.0,
+            ]
+
+            if top_angle is not None:
+                rotation_errors.append(top_angle)
+
+            if bottom_angle is not None:
+                rotation_errors.append(bottom_angle)
+
+            rotation_error = float(np.mean(rotation_errors))
+
+            Mrot = cv2.getRotationMatrix2D(
+                (W_img/2, H_img/2),
+                rotation_error,
+                1.0
+            )
+
+            if DEBUG:
+                print(
+                    f"line 575: before rotation: "
+                    f"top_angle={top_angle:.3f} "
+                    f"bottom_angle={bottom_angle:.3f} "
+                    f"outside_angle={outside_angle:.3f}"
+                )
+
+            if remove_inside_transparent_strip:
+                # remove the extra inside edge
+                # rotate with gray background
+                rotated = cv2.warpAffine(
+                    img,
+                    Mrot,
+                    (W_img, H_img),
+                    # borderValue=(255,255,255) # white
+                    borderValue=(128,128,128) # gray
+                )
+            else:
+                # keep the extra inside edge
+                # rotate with transparent background
+                # add alpha channel
+                img_bgra = cv2.cvtColor(
+                    img,
+                    cv2.COLOR_BGR2BGRA,
+                )
+                # init alpha channel
+                # img_bgra[:, :, 3] = 255
+                rotated_bgra = cv2.warpAffine(
+                    img_bgra,
+                    Mrot,
+                    (W_img, H_img),
+                    flags=cv2.INTER_LINEAR,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=(0, 0, 0, 0),
+                )
+                rotated = rotated_bgra
+
+            Hr, Wr = rotated.shape[:2]
+
+    # also rotate the detected edges
+
+            rotated_corners = transform_points_affine(
+                src_corners,
+                Mrot,
+            )
+
+            inside_top = rotated_corners[0]
+            outside_top = rotated_corners[1]
+            outside_bottom = rotated_corners[2]
+            inside_bottom = rotated_corners[3]
+
+            # remember the inside edge for later cropping
+            actual_inside_top = rotated_corners[0].copy()
+            actual_inside_bottom = rotated_corners[3].copy()
+
+            # ignore the inside edge for perspective transform
+            # Ignore the unknown inside-edge angle for perspective correction.
+            # Use the image boundary as the inside edge.
+            if bad_on_left:
+                # outside edge is the RIGHT edge
+                # inside edge is the LEFT edge
+                inside_top[0] = 0
+                inside_bottom[0] = 0
+            else:
+                # outside edge is the LEFT edge
+                # inside edge is the RIGHT edge
+                inside_top[0] = Wr - 1
+                inside_bottom[0] = Wr - 1
+
+            # don't use the missing edge as though it were detected after rotation
+            # (inside_top, outside_top, outside_bottom, inside_bottom)
+            # contain image-boundary points when an edge is missing.
+            # but the perspective transform should distinguish the two cases
+            if missing_top:
+                # The top edge was cropped by the scanner.
+                #
+                # Preserve the rotated image's top boundary instead of trying
+                # to invent the missing page edge.
+                inside_top = np.array(
+                    [inside_top[0], 0.0],
+                    dtype=np.float32,
+                )
+                outside_top = np.array(
+                    [outside_top[0], 0.0],
+                    dtype=np.float32,
+                )
+            if missing_bottom:
+                # The bottom edge was cropped by the scanner.
+                #
+                # Preserve the rotated image's bottom boundary.
+                inside_bottom = np.array(
+                    [inside_bottom[0], float(Hr - 1)],
+                    dtype=np.float32,
+                )
+                outside_bottom = np.array(
+                    [outside_bottom[0], float(Hr - 1)],
+                    dtype=np.float32,
+                )
+
+            top_width = np.linalg.norm(
+                outside_top - inside_top
+            )
+            bottom_width = np.linalg.norm(
+                outside_bottom - inside_bottom
+            )
+            left_height = np.linalg.norm(
+                inside_bottom - inside_top
+            )
+            right_height = np.linalg.norm(
+                outside_bottom - outside_top
+            )
+
+            # expected size after rotation
+            expected_w = int(round(
+                (top_width + bottom_width) / 2.0
+            ))
+            expected_h = int(round(
+                (left_height + right_height) / 2.0
+            ))
+            if 0:
+                # Or, if you want the height to be determined specifically by the outside edge
+                # The average is usually more stable, though.
+                expected_h = int(round(
+                    right_height
+                ))
+
+            if DEBUG:
+                print("line 580: rotated size", Wr, Hr)
+
+            # img = rotated # ?
+
+    if 0:
+                # approximated page height
+                page_height = math.dist(
+                    outside_top,
+                    outside_bottom
+                )
+            else:
+                # perpendicular page height
+                page_height = math.hypot(
+                    outside_bottom[0] - outside_top[0],
+                    outside_bottom[1] - outside_top[1]
+                )
+
+            # # no. this fails to reconstruct the page height...
+            # # TODO try to solve this with the average height of multiple pages
+            # # assuming all pages must have the same height
+            # # also allowing the user to specify a scale_y factor
+            # if 0:
+            #     if config.do_rotate == False:
+            #         # fix scan height
+            #         # ...
+            #         pass
+
+            expected_h = int(round(page_height))
+
+            # # ASPECT = x / y
+            # # x = y * ASPECT
+
+            # # expand the binding edge to expected_w
+            # # expected_w = int(round(expected_h * ASPECT))
+            # expected_w = int(round(page_height * ASPECT))
+
+            if DEBUG:
+                vis = rotated.copy()
+                pts_rotated = np.round(
+                    rotated_corners
+                ).astype(np.int32)
+                cv2.polylines(
+                    vis,
+                    [pts_rotated],
+                    True,
+                    (0, 0, 255), # red
+                    3,
+                )
+                name = OUTPUT_DIR / (f"{page_num:03d}.line-1200-rotated-corners.tiff")
+                save_image(str(name), vis)
+
+    # 7b. cleanup the inside edge
+            # use outmost_inside_x to remove the half-transparent inside edge
+            # if remove_inside_transparent_strip:
+            if 0:
+                if bad_on_left:
+                    # odd page
+                    # Inside edge is on the LEFT.
+                    # Remove everything from x=0 through outmost_inside_x.
+                    crop_x = int(math.ceil(outmost_inside_x))
+                    rotated = rotated[:, crop_x:, :]
+
+                else:
+                    # even page
+                    # Inside edge is on the RIGHT.
+                    # Remove everything from outmost_inside_x through the right edge.
+                    crop_x = int(math.floor(outmost_inside_x))
+                    rotated = rotated[:, :crop_x, :]
+
+    if DEBUG:
+                print(
+                    f"page {page_num}: geometry mode = "
+                    f"{'3-edge' if not (missing_top or missing_bottom) else '2-edge'}"
+                )
+
+                if missing_top:
+                    print(
+                        f"page {page_num}: top edge missing; "
+                        f"preserving image top boundary"
+                    )
+
+                if missing_bottom:
+                    print(
+                        f"page {page_num}: bottom edge missing; "
+                        f"preserving image bottom boundary"
+                    )
+
+    # 8. perspective transform
+            # deskew part 2
+
+            # crop as a quadrilateral
+            # not better than "crop as a rectangle"?
+            if 0:
+                # expand the binding edge to expected_w
+                if bad_on_left:
+                    # outside edge is the RIGHT edge
+                    x1_top = outside_top[0]
+                    x1_bottom = outside_bottom[0]
+                    x0_top = x1_top - expected_w
+                    x0_bottom = x1_bottom - expected_w
+                else:
+                    # outside edge is the LEFT edge
+                    x0_top = outside_top[0]
+                    x0_bottom = outside_bottom[0]
+                    x1_top = x0_top + expected_w
+                    x1_bottom = x0_bottom + expected_w
+            else:
+                # dont expand the binding edge to expected_w
+                # use only the detected page edges
+                # if bad_on_left:
+                #     # outside edge is RIGHT edge
+                #     x1_top = outside_top[0]
+                #     x1_bottom = outside_bottom[0]
+                #     # use the actual detected left edge
+                #     x0_top = np.min(page_contour[:,0,0])
+                #     x0_bottom = x0_top
+                # else:
+                #     # outside edge is LEFT edge
+                #     x0_top = outside_top[0]
+                #     x0_bottom = outside_bottom[0]
+                #     # use the actual detected right edge
+                #     x1_top = np.max(page_contour[:,0,0])
+                #     x1_bottom = x1_top
+                # problem: page_contour after thresholding may include the background
+                # or may not have a reliable missing-edge position.
+                # A cleaner temporary solution is to use the detected quadrilateral width
+                # from the two horizontal edge intersections
+                if bad_on_left:
+                    # outside edge is right
+                    x1_top = outside_top[0]
+                    x1_bottom = outside_bottom[0]
+                    # binding edge
+                    # find leftmost detected page boundary
+                    # x0_top = np.min(top_pts[:,0])
+                    # x0_bottom = np.min(bottom_pts[:,0])
+                    x0_top = 0
+                    x0_bottom = 0
+                else:
+                    # outside edge is left
+                    x0_top = outside_top[0]
+                    x0_bottom = outside_bottom[0]
+                    # binding edge
+                    # find rightmost detected page boundary
+                    # x1_top = np.max(top_pts[:,0])
+                    # x1_bottom = np.max(bottom_pts[:,0])
+                    x1_top = Wr - 1
+                    x1_bottom = Wr - 1
+
+                # dont expand the binding edge to expected_w
+                expected_w = int(round(
+                    math.dist((x0_top, outside_top[1]), (x1_top, outside_top[1]))
+                ))
+
+            if bad_on_left:
+                # inside = LEFT
+                # outside = RIGHT
+                src = np.float32([
+                    inside_top,       # TL
+                    outside_top,      # TR
+                    outside_bottom,   # BR
+                    inside_bottom,    # BL
+                ])
+            else:
+                # outside = LEFT
+                # inside = RIGHT
+                src = np.float32([
+                    outside_top,      # TL
+                    inside_top,       # TR
+                    inside_bottom,    # BR
+                    outside_bottom,   # BL
+                ])
+
+            dst = np.float32([
+                [0, 0],
+                [expected_w - 1, 0],
+                [expected_w - 1, expected_h - 1],
+                [0, expected_h - 1],
+            ])
+
+            M = cv2.getPerspectiveTransform(src, dst)
+
+            crop = cv2.warpPerspective(
+                rotated,
+                M,
+                (expected_w, expected_h),
+                borderValue=(255,255,255)
+            )
+
+            if DEBUG:
+                print(
+                    "line 650: crop",
+                    f"W_img={W_img}",
+                    f"H_img={H_img}",
+                    f"outside_top={outside_top}",
+                    f"outside_bottom={outside_bottom}",
+                    f"x1_top={x1_top}",
+                    f"x1_bottom={x1_bottom}",
+                    f"x0_top={x0_top}",
+                    f"x0_bottom={x0_bottom}",
+                    f"expected_w={expected_w}",
+                    f"expected_h={expected_h}",
+                )
+
+            actual_inside_warped = cv2.perspectiveTransform(
+                np.array([[
+                    actual_inside_top,
+                    actual_inside_bottom,
+                ]], dtype=np.float32),
+                M,
+            )[0]
+
+            actual_inside_top_warped = actual_inside_warped[0]
+            actual_inside_bottom_warped = actual_inside_warped[1]
+
+            inside_top_x = actual_inside_top_warped[0]
+            inside_bottom_x = actual_inside_bottom_warped[0]
+            if bad_on_left:
+                # odd page
+                # inside edge is the LEFT edge
+                outmost_inside_x = max(inside_top_x, inside_bottom_x)
+            else:
+                # even page
+                # inside edge is the RIGHT edge
+                outmost_inside_x = min(inside_top_x, inside_bottom_x)
+
+            # crop = rotated[
+            #     0:expected_h,
+            #     int(x0_page):int(x1_page)
+            # ]
+
+            # y_top = round(outside_top[1])
+            # y_bottom = round(outside_bottom[1])
+            # actual_height = y_bottom - y_top
+            # crop = rotated[
+            #     y_top:y_top + expected_h,
+            #     x0_page:x1_page
+            # ]
+
+            # y_top = int(round(outside_top[1]))
+            # y_bottom = int(round(outside_bottom[1]))
+            # crop = rotated[
+            #     y_top:y_bottom,
+            #     x0_page:x1_page
+            # ]
+
+            if 0:
+                # img = repair_binding(img, bad_on_left, width=50)
+                if 1:
+                    # rotated = repair_binding(rotated, bad_on_left, width=50)
+                    # Hr, Wr = rotated.shape[:2]
+                    # print("line 660: rotated size", Wr, Hr)
+                    # warped = rotated
+                    crop = repair_binding(crop, bad_on_left, width=50)
+                    Hr, Wr = crop.shape[:2]
+                    if DEBUG:
+                        print("line 660: crop size", Wr, Hr)
+                else:
+                    crop = repair_binding(crop, bad_on_left, width=50)
+
+                if DEBUG:
+                    print(
+                        "line 760: after repair_binding: crop actual:",
+                        f"crop.shape[1]={crop.shape[1]}",
+                        f"expected_w={expected_w}",
+                    )
+
+            warped = crop
+
+    # 8b. cleanup the inside edge
+            # use outmost_inside_x to remove the half-transparent inside edge
+            if remove_inside_transparent_strip:
+                if bad_on_left:
+                    # Inside edge is on the LEFT.
+                    # Remove everything from x=0 through outmost_inside_x.
+                    crop_x = int(math.ceil(outmost_inside_x))
+                    warped = warped[:, crop_x:, :]
+                    cleanup_crop_offset_x = crop_x
+
+                else:
+                    # Inside edge is on the RIGHT.
+                    # Remove everything from outmost_inside_x through the right edge.
+                    crop_x = int(math.floor(outmost_inside_x))
+                    warped = warped[:, :crop_x, :]
+                    cleanup_crop_offset_x = 0
+
+    else: # config.use_three_edge_deskew == False
+
+            # two-edge deskew
+            #
+            # The book is too tall for `scan_top_edge = "inside"`,
+            # so we have to use `scan_top_edge = "top"`,
+            # so the top page edge is missing.
+            # Use only the outside edge and bottom edge.
+            #
+            # `scan_top_edge == "top"` means:
+            # the image top is the missing page edge.
+
+            if DEBUG: print("config.use_three_edge_deskew == False")
+
+            if config.scan_top_edge != "top":
+                raise NotImplementedError("two-edge deskew currently supports only scan_top_edge='top'")
+
+            if outside_line is None:
+                raise RuntimeError(f"not found outside edge of {in_path}: {len(outside_pts)} candidate points")
+
+            if bottom_line is None:
+                raise RuntimeError(f"not found bottom edge of {in_path}: {len(bottom_pts)} candidate points")
+
+            if inside_line is None:
+                raise RuntimeError(f"not found inside edge of {in_path}: {len(inside_pts)} candidate points")
+
+            # Use the two detected edges to estimate rotation.
+            outside_angle = vertical_line_angle(outside_line)
+            bottom_angle = horizontal_line_angle(bottom_line)
+
+            rotation_error = float(
+                np.mean([
+                    outside_angle - 90.0,
+                    bottom_angle,
+                ])
+            )
+
+            Mrot = cv2.getRotationMatrix2D(
+                (W_img / 2.0, H_img / 2.0),
+                rotation_error,
+                1.0,
+            )
+
+            if remove_inside_transparent_strip:
+                # remove the extra inside edge
+                # rotate with gray background
+                rotated = cv2.warpAffine(
+                    img,
+                    Mrot,
+                    (W_img, H_img),
+                    # borderValue=(255,255,255) # white
+                    borderValue=(128,128,128) # gray
+                )
+            else:
+                # keep the extra inside edge
+                # rotate with transparent background
+                # add alpha channel
+                img_bgra = cv2.cvtColor(
+                    img,
+                    cv2.COLOR_BGR2BGRA,
+                )
+                # init alpha channel
+                # img_bgra[:, :, 3] = 255
+                rotated_bgra = cv2.warpAffine(
+                    img_bgra,
+                    Mrot,
+                    (W_img, H_img),
+                    flags=cv2.INTER_LINEAR,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=(0, 0, 0, 0),
+                )
+                rotated = rotated_bgra
+
+            # # Transform the two useful corners.
+            # outside_bottom = intersect_lines(outside_line, bottom_line)
+
+            # p = np.array(
+            #     [outside_bottom[0], outside_bottom[1], 1.0],
+            #     dtype=np.float64,
+            # )
+            # outside_bottom_rot = Mrot @ p
+            # outside_bottom_rot = outside_bottom_rot[:2]
+
+            # # # The missing top edge is the top of the rotated scan.
+            # # inside_x = 0.0 if bad_on_left else float(W_img - 1)
+
+            # # FIXME patch the crop geometry
+
+            # inside_top = np.array([inside_x, 0.0], dtype=np.float64)
+            # outside_top = np.array(
+            #     [outside_bottom_rot[0], 0.0],
+            #     dtype=np.float64,
+            # )
+            # inside_bottom = np.array(
+            #     [inside_x, outside_bottom_rot[1]],
+            #     dtype=np.float64,
+            # )
+
+            # # Page dimensions.
+            # expected_w = int(round(
+            #     abs(outside_bottom_rot[0] - inside_x)
+            # ))
+            # expected_h = int(round(
+            #     abs(outside_bottom_rot[1])
+            # ))
+
+            # if expected_w <= 0 or expected_h <= 0:
+            #     raise RuntimeError(
+            #         f"invalid two-edge page size: {expected_w}x{expected_h}"
+            #     )
+
+            # src_corners = np.array([
+            #     inside_top,
+            #     outside_top,
+            #     outside_bottom_rot,
+            #     inside_bottom,
+            # ], dtype=np.float32)
+
+            # if not bad_on_left:
+            #     src_corners = np.array([
+            #         outside_top,
+            #         inside_top,
+            #         inside_bottom,
+            #         outside_bottom_rot,
+            #     ], dtype=np.float32)
+
+            # dst_corners = np.array([
+            #     [0, 0],
+            #     [expected_w - 1, 0],
+            #     [expected_w - 1, expected_h - 1],
+            #     [0, expected_h - 1],
+            # ], dtype=np.float32)
+
+            # M = cv2.getPerspectiveTransform(src_corners, dst_corners)
+
+            # warped = cv2.warpPerspective(
+            #     rotated,
+            #     M,
+            #     (expected_w, expected_h),
+            #     flags=cv2.INTER_LINEAR,
+            #     borderMode=cv2.BORDER_CONSTANT,
+            #     borderValue=(255, 255, 255),
+            # )
+
+            # Transform the detected lines into the rotated image.
+            # OpenCV's affine transform maps points from the original image
+            # into the rotated image.
+
+            # def transform_point(point, M):
+            #     p = np.array([point[0], point[1], 1.0], dtype=np.float64)
+            #     return M @ p
+
+            # def transform_line(line, M):
+            #     # Represent the line as a homogeneous vector.
+            #     # This assumes intersect_lines() uses lines represented by
+            #     # two endpoints: ((x1, y1), (x2, y2)).
+            #     p1, p2 = line
+            #     p1 = transform_point(p1, M)
+            #     p2 = transform_point(p2, M)
+
+            #     p1 = np.asarray(p1, dtype=np.float64)
+            #     p2 = np.asarray(p2, dtype=np.float64)
+
+            #     return (p1, p2)
+
+            # # Transform representative points on each detected line.
+            # outside_p1, outside_p2 = transform_line(outside_line, Mrot)
+            # inside_p1, inside_p2 = transform_line(inside_line, Mrot)
+            # bottom_p1, bottom_p2 = transform_line(bottom_line, Mrot)
+
+            # def line_coefficients(p1, p2):
+            #     # Return a*x + b*y + c = 0.
+            #     a = p1[1] - p2[1]
+            #     b = p2[0] - p1[0]
+            #     c = p1[0] * p2[1] - p2[0] * p1[1]
+            #     return np.array([a, b, c], dtype=np.float64)
+
+            # outside_rot = line_coefficients(outside_p1, outside_p2)
+            # inside_rot = line_coefficients(inside_p1, inside_p2)
+            # bottom_rot = line_coefficients(bottom_p1, bottom_p2)
+
+            def transform_point(point, M):
+                p = np.array(
+                    [point[0], point[1], 1.0],
+                    dtype=np.float64,
+                )
+                return M @ p
+
+    def transform_line(line, M):
+                vx, vy, x0, y0 = map(float, line)
+
+                # Two points on the original fitted line.
+                p1 = np.array([x0 - vx, y0 - vy], dtype=np.float64)
+                p2 = np.array([x0 + vx, y0 + vy], dtype=np.float64)
+
+                # Transform both points into rotated-image coordinates.
+                p1_rot = transform_point(p1, M)
+                p2_rot = transform_point(p2, M)
+
+                return line_coefficients(p1_rot, p2_rot)
+
+    def line_coefficients(p1, p2):
+                # Return homogeneous line coefficients a*x + b*y + c = 0.
+                a = p1[1] - p2[1]
+                b = p2[0] - p1[0]
+                c = p1[0] * p2[1] - p2[0] * p1[1]
+                return np.array([a, b, c], dtype=np.float64)
+
+    outside_rot = transform_line(outside_line, Mrot)
+            inside_rot = transform_line(inside_line, Mrot)
+            bottom_rot = transform_line(bottom_line, Mrot)
+
+            def intersect_coefficients(line1, line2):
+                a1, b1, c1 = line1
+                a2, b2, c2 = line2
+
+                det = a1 * b2 - a2 * b1
+                if abs(det) < 1e-10:
+                    raise RuntimeError("Cannot intersect nearly parallel crop edges")
+
+                x = (b1 * c2 - b2 * c1) / det
+                y = (c1 * a2 - c2 * a1) / det
+                return np.array([x, y], dtype=np.float64)
+
+            # The missing top edge is the top of the rotated scan.
+            top_boundary = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+
+            inside_top = intersect_coefficients(inside_rot, top_boundary)
+            outside_top = intersect_coefficients(outside_rot, top_boundary)
+
+            inside_bottom = intersect_coefficients(inside_rot, bottom_rot)
+            outside_bottom = intersect_coefficients(outside_rot, bottom_rot)
+
+            # Order the corners consistently around the page:
+            # top-left, top-right, bottom-right, bottom-left.
+            if bad_on_left:
+                corners = [
+                    inside_top,
+                    outside_top,
+                    outside_bottom,
+                    inside_bottom,
+                ]
+            else:
+                corners = [
+                    outside_top,
+                    inside_top,
+                    inside_bottom,
+                    outside_bottom,
+                ]
+
+            src_corners = np.asarray(corners, dtype=np.float32)
+
+            # Crop dimensions from the distances between the corners.
+            top_w = np.linalg.norm(src_corners[1] - src_corners[0])
+            bottom_w = np.linalg.norm(src_corners[2] - src_corners[3])
+            left_h = np.linalg.norm(src_corners[3] - src_corners[0])
+            right_h = np.linalg.norm(src_corners[2] - src_corners[1])
+
+            expected_w = int(round(max(top_w, bottom_w)))
+            expected_h = int(round(max(left_h, right_h)))
+
+            if expected_w <= 0 or expected_h <= 0:
+                raise RuntimeError(
+                    f"invalid two-edge page size: {expected_w}x{expected_h}"
+                )
+
+            dst_corners = np.array([
+                [0, 0],
+                [expected_w - 1, 0],
+                [expected_w - 1, expected_h - 1],
+                [0, expected_h - 1],
+            ], dtype=np.float32)
+
+            M = cv2.getPerspectiveTransform(src_corners, dst_corners)
+
+            warped = cv2.warpPerspective(
+                rotated,
+                M,
+                (expected_w, expected_h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(255, 255, 255),
+            )
+
+    # TODO? remove remove_gray_edge_artifacts
+
+    # 8c. Remove scanner background outside the actual curved page edges.
+        #
+        # The scanner-cropped edge is left untouched.
+        # The other three edges follow their detected point curves.
+        if CLEAN_GRAY_EDGE_ARTIFACTS:
+            warped = remove_background_outside_page(
+                image=warped,
+                edge_points=cleanup_edge_pts,
+                Mrot=Mrot,
+                M=M,
+                bad_on_left=bad_on_left,
+                scan_top_edge=config.scan_top_edge,
+                transparent=not remove_inside_transparent_strip,
+                crop_offset_x=cleanup_crop_offset_x,
+            )
+        # ...
+
+## Response:
+
+11/3/2026, 5:59:59 PM
+
+> **Refining edge detection**
+>
+> I’m mapping physical edges to output sides consistently, then sampling inward along each edge. I’ll detect neutral gray-to-white gradients, require monotonic brightening and a clear endpoint, and mark the matching strip transparent.
+>
+> **Tightening gradient cleanup**
+>
+> I’m rejecting isolated or inconsistent samples, requiring a sustained neutral-gray-to-white progression, and median-filtering detected depths along each edge. This should preserve ordinary page content while removing genuine edge gradients conservatively.
+>
+> **Refined edge detection and tightened gradient cleanup**
+>
+> Worked for 16s
+
+Thanks. With the actual function and call site, I can make this fit your existing pipeline without changing the deskew or perspective correction.
+
+I would make one important adjustment to the approach: **don't move the detected edge itself. Instead, extend the existing outside-page mask a few pixels into the page, using color profiles to decide where to stop.**
+
+That gives us two independent safeguards:
+
+- The detected, constrained edge remains the geometric reference.
+- The additional removal is permitted only where the scanner gray transitions into a genuinely neutral white page background.
+
+For a first implementation, I recommend scanning inward by up to 12 pixels, examining the BGR color profile, and requiring a sustained white endpoint. If the profile looks colored, dark, or ambiguous, we leave it alone.
+
+There is also a subtle issue with your current code: `cv2.warpPerspective()` uses interpolation, so the gray-to-white transition can be spread across a few pixels even when the geometric boundary is correct. The additional pass should remove that interpolation fringe too.
+
+I would add this directly to `remove_background_outside_page()`. The following implementation keeps your existing polygon cleanup and adds a second, conservative pass for the gray-to-white fringe.
+
+The key is that it doesn't just check whether pixels become brighter. It requires:
+
+- The transition to be approximately neutral (all three color channels similar).
+- All three channels to increase together, allowing a little scan noise.
+- The transition to reach a sustained white area.
+- The same behavior to occur across neighboring edge profiles. Isolated detections are rejected with a median filter.
+
+This is deliberately biased towards retaining questionable pixels.
+
+## 1. Add these parameters near the top of your script
+
+## 2. Add this helper function
+
+Notice that the returned depth is the position of the first white pixel, not the position of the last white pixel. We preserve the white page background.
+
+## 3. Add this second helper function
+
+It samples the existing transformed edge points, applies the white-gradient test, and smooths the detected removal depths along the edge.
+
+## 4. Modify your existing `remove_background_outside_page()`
+
+You only need to add the following section immediately after `cv2.fillPoly()` creates `page_mask`:
+
+Then delete the old line:
+
+Everything below that remains unchanged:
+
+------------------------------------------------------------------------
+
+## 5. Initial tuning
+
+I would start with the parameters above and inspect a few difficult pages.
+
+| Parameter | Initial value | Purpose |
+|----|---:|----|
+| `GRAY_GRADIENT_MAX_WIDTH` | 12 px | Maximum inward search |
+| `GRAY_GRADIENT_WHITE_THRESHOLD` | 245 | Required white endpoint |
+| `GRAY_GRADIENT_NEUTRAL_TOLERANCE` | 14 | Reject colored transitions |
+| `GRAY_GRADIENT_MONOTONIC_TOLERANCE` | 4 | Allow scan noise |
+| `GRAY_GRADIENT_WHITE_RUN` | 3 px | Require sustained white |
+| `GRAY_GRADIENT_MEDIAN_SIZE` | 5 | Suppress isolated detections |
+
+**One limitation worth mentioning:** this is a conservative heuristic, not a mathematical guarantee that printed content can never be removed. A very light gray printed gradient that is neutral and ends in white could resemble scanner background. The neighborhood consistency test reduces that risk, but cannot eliminate it.
+
+I would initially leave the maximum width at 12 pixels rather than increase it. If the remaining gray lines are consistently wider than that, we can investigate the actual color profiles before making the removal more aggressive.
+
+My recommendation for the next debugging step is to optionally save `gradient_mask` as a separate diagnostic image. That will show exactly which additional pixels the new logic wants to remove, independently of the existing outside-page mask.
 
 ------------------------------------------------------------------------
 
