@@ -22,9 +22,10 @@ Dependencies:
 import argparse
 import csv
 import math
+import os
 import re
 import shutil
-import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -66,6 +67,18 @@ def page_number(path):
     return int(match.group(1)) if match else None
 
 
+def page_images(directory):
+    """Yield page numbers and image paths from one directory."""
+    if not directory.is_dir():
+        return
+    for path in directory.iterdir():
+        if path.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+        number = page_number(path)
+        if number is not None and path.is_file():
+            yield number, path
+
+
 def discover_sources(src):
     """Find the main scan directory and timestamped repeat-scan directories."""
     dirs = [src]
@@ -76,14 +89,8 @@ def discover_sources(src):
 
     pages = {}
     for directory in dirs:
-        if not directory.is_dir():
-            continue
-        for path in directory.iterdir():
-            if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
-                continue
-            number = page_number(path)
-            if number is not None:
-                pages.setdefault(number, []).append(path)
+        for number, path in page_images(directory):
+            pages.setdefault(number, []).append(path)
 
     for number in pages:
         pages[number] = sorted(pages[number], key=lambda p: (p.parent.name, p.name))
@@ -211,25 +218,7 @@ def file_contents_equal(path_a, path_b, chunk_size=1024 * 1024):
 
 
 def process_page(task):
-    number, candidates, dst_dir, force = task
-    dst_dir = Path(dst_dir)
-    dst = dst_dir / candidates[0].name
-
-    if dst.exists() and not force:
-        output_mtime = dst.stat().st_mtime_ns
-        newest_input_mtime = max(
-            p.stat().st_mtime_ns
-            for p in candidates
-        )
-
-        if newest_input_mtime <= output_mtime:
-            return (
-                number,
-                "skipped",
-                str(dst),
-                None,
-                "inputs are not newer",
-            )
+    number, candidates, dst, processed_mtime = task
 
     scored = []
     errors = []
@@ -246,29 +235,21 @@ def process_page(task):
     winner = min(scored, key=lambda item: (item["score"], item["path"]))
     source = Path(winner["path"])
 
-    dst_dir.mkdir(parents=True, exist_ok=True)
-
     if dst.exists() and file_contents_equal(source, dst):
-        details = {
-            "winner": str(source),
-            "candidate_count": len(candidates),
-            "score": winner["score"],
-            "vertical_lines": winner["vertical_lines"],
-            "speckles": winner["speckles"],
-            "laplacian_variance": winner["laplacian_variance"],
-            "contrast_std": winner["contrast_std"],
-            "errors": " | ".join(errors),
-        }
-        return number, "unchanged", str(dst), details, None
-
-    # Copy to a temporary file, then atomically replace the output.
-    temp_dst = dst.with_name(dst.name + ".tmp")
-
-    try:
-        shutil.copy2(source, temp_dst)
-        temp_dst.replace(dst)
-    finally:
-        temp_dst.unlink(missing_ok=True)
+        stat = dst.stat()
+        os.utime(dst, ns=(stat.st_atime_ns, processed_mtime))
+        status = "unchanged"
+    else:
+        # Stamp the result of scoring, since copy2 preserves the winner's mtime.
+        temp_dst = dst.with_name(dst.name + ".tmp")
+        try:
+            shutil.copy2(source, temp_dst)
+            stat = temp_dst.stat()
+            os.utime(temp_dst, ns=(stat.st_atime_ns, processed_mtime))
+            temp_dst.replace(dst)
+        finally:
+            temp_dst.unlink(missing_ok=True)
+        status = "done"
 
     details = {
         "winner": str(source),
@@ -280,7 +261,14 @@ def process_page(task):
         "contrast_std": winner["contrast_std"],
         "errors": " | ".join(errors),
     }
-    return number, "done", str(dst), details, None
+    return number, status, str(dst), details, None
+
+
+def file_mtime(path):
+    try:
+        return path.stat().st_mtime_ns
+    except FileNotFoundError:
+        return float("-inf")
 
 
 def main():
@@ -301,32 +289,49 @@ def main():
     )
     parser.add_argument(
         "--force", action="store_true",
-        help="overwrite existing output files",
+        help="rescore all pages even when outputs are up to date",
     )
     args = parser.parse_args()
 
     src = args.src
     dst = args.dst
     pages = discover_sources(src)
-
-    if not pages:
-        sys.exit(f"no page images found in {src} or {src.name}.tmp.*")
-
-    # Only create work for pages with at least one source candidate.
-    tasks = [
-        (number, candidates, str(dst), args.force)
-        for number, candidates in sorted(pages.items())
-    ]
-
-    dst.mkdir(parents=True, exist_ok=True)
-    print(f"found {len(tasks)} pages; output: {dst}")
-    print("scoring candidates (lower score is better)")
+    outputs = {}
+    for number, path in sorted(page_images(dst)):
+        outputs.setdefault(number, []).append(path)
 
     report_path = dst / "045-find-best-scan.csv"
-    rows = []
+    started = time.time_ns()
+    tasks = []
+    for number, candidates in sorted(pages.items()):
+        default_output = dst / candidates[0].name
+        existing = outputs.get(number, [])
+        output = default_output
+        if existing and default_output not in existing:
+            output = existing[0]
+        newest_input = max(path.stat().st_mtime_ns for path in candidates)
+        if args.force or newest_input > file_mtime(output):
+            tasks.append((number, candidates, output, max(started, newest_input)))
+
+    if not tasks:
+        print("nothing to do")
+        return
+
+    dst.mkdir(parents=True, exist_ok=True)
+    print(f"processing {len(tasks)} of {len(pages)} pages; output: {dst}")
+    print("scoring candidates...")
+
+    rows = {}
+    if report_path.is_file():
+        with report_path.open(newline="", encoding="utf-8") as f:
+            rows = {
+                int(row["page"]): row
+                for row in csv.DictReader(f)
+                if int(row["page"]) in pages
+            }
     done = 0
     unchanged = 0
-    skipped = 0
+    skipped = len(pages) - len(tasks)
     failed = 0
 
     with ProcessPoolExecutor(max_workers=max(1, args.workers)) as executor:
@@ -336,31 +341,24 @@ def main():
             ):
                 if status == "done":
                     done += 1
-                    rows.append({"page": number, "status": status, **details})
+                    rows[number] = {"page": number, "status": status, **details}
                 elif status == "unchanged":
                     unchanged += 1
-                    rows.append({
+                    rows[number] = {
                         "page": number,
                         "status": status,
-                        **(details or {}),
-                    })
-                elif status == "skipped":
-                    skipped += 1
-                    rows.append({
-                        "page": number, "status": status,
-                        "output": output, "message": error,
-                    })
+                        **details,
+                    }
                 else:
                     failed += 1
-                    rows.append({
+                    rows[number] = {
                         "page": number, "status": status,
                         "output": output, "message": error,
-                    })
+                    }
                     print(f"\npage {number}: {error}")
                 pbar.update(1)
 
-    # Write a compact audit log. Candidate-level scores are printed to the CSV
-    # in a separate row for each candidate, including the selected winner.
+    # Keep the previous audit rows for pages that did not need rescoring.
     with report_path.open("w", newline="", encoding="utf-8") as f:
         fieldnames = [
             "page", "status", "winner", "candidate_count", "score",
@@ -369,7 +367,7 @@ def main():
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(rows[number] for number in sorted(rows))
 
     print(
         f"done: updated {done} pages, "
