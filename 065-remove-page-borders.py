@@ -2262,11 +2262,11 @@ def process_image(in_path, out_path):
     if np.mean(gray[page_mask == 255]) < np.mean(gray[page_mask == 0]):
         page_mask = cv2.bitwise_not(page_mask)
 
-    page_mask = cv2.morphologyEx(
-        page_mask,
-        cv2.MORPH_CLOSE,
-        np.ones((5,5), np.uint8)
-    )
+    kernel = np.ones((5, 5), np.uint8)
+    # Remove thin scanner streaks before closing gaps. Otherwise closing
+    # can join a streak to the page, and the edge scan stops at the streak.
+    page_mask = cv2.morphologyEx(page_mask, cv2.MORPH_OPEN, kernel)
+    page_mask = cv2.morphologyEx(page_mask, cv2.MORPH_CLOSE, kernel)
 
 
 
