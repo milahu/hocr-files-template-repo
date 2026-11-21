@@ -40,7 +40,7 @@ from tqdm import tqdm
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SRC = Path("040-scan-pages")
-DST = Path("045-find-best-scan")
+DST = Path(Path(__file__).stem)
 IMAGE_EXTENSIONS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp"}
 
 NUM_WORKERS = psutil.cpu_count(logical=False) or 1
