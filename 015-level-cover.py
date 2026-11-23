@@ -32,6 +32,14 @@ from _shared import (
 src = Path("013-scan-cover-fixed-colors")
 dst = Path(Path(__file__).stem)
 
+image_suffixes = (
+    ".jpg",
+    ".jpeg",
+    ".tiff",
+    ".png",
+    ".avif",
+)
+
 
 # --- Settings ----------------------------------------------------------------
 config = load_config()
@@ -107,7 +115,14 @@ def main():
     dst.mkdir(parents=True, exist_ok=True)
 
     t1 = time.time()
-    images = sorted(src.glob(f"*.{config.scan_format}"))
+
+    images = sorted(src.glob(f"*"))
+
+    def filter_src_file(src_file):
+        return src_file.suffix in image_suffixes
+
+    images = list(filter(filter_src_file, images))
+
     if not images:
         print("No input files found.")
         exit(0)
