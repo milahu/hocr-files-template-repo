@@ -8,7 +8,7 @@ Inputs:
     ...
 
 Output:
-    045-find-best-scan/010.tiff
+    045-find-best-scans/010.tiff
 
 This first version selects an entire source image; it does not combine pixels
 from different scans. Therefore it does not need to geometrically align scans
@@ -56,7 +56,7 @@ WEIGHT_CONTRAST = 0.25
 # black page borders can otherwise dominate the score.
 BORDER_RATIO = 0.015
 
-# Downsample large images for scoring. The source image is copied unchanged.
+# Downsample large images for the general quality metrics.
 MAX_SCORE_DIMENSION = 1800
 
 # -----------------------------------------------------------------------------
@@ -119,13 +119,37 @@ def load_gray(path):
     return np.clip(gray, 0, 255).astype(np.uint8)
 
 
+def vertical_line_score(gray):
+    """Measure persistent dark streaks at the scan's original column resolution."""
+    h, w = gray.shape
+    # Look past the streak on both sides. Requiring both neighbors to be
+    # lighter suppresses one-sided edges such as the edge of the paper.
+    offset = max(2, round(w * 0.004))
+    bx = max(offset, int(w * BORDER_RATIO))
+    by = int(h * BORDER_RATIO)
+    if 2 * bx >= w:
+        return 0.0
+
+    # Sample rows without resampling columns, so even a one-pixel line survives.
+    row_step = max(1, h // 1000)
+    rows = gray[by:h - by:row_step].astype(np.int16)
+    left = rows[:, bx - offset:w - bx - offset]
+    right = rows[:, bx + offset:w - bx + offset]
+    darkness = np.minimum(left, right) - rows[:, bx:w - bx]
+
+    # Require darkness in roughly a third of the rows so streaks that fade
+    # along the page still count. Discount small fluctuations and sum the
+    # squared contrast so both darker and wider streaks contribute more.
+    strength = np.maximum(np.percentile(darkness, 65, axis=0) - 2, 0)
+    return float(np.sum(strength ** 2) / w)
+
+
 def score_image(path):
     """
     Calculate explainable image-quality metrics; lower total score is better.
 
     vertical_lines:
-        Mean absolute difference between a column and its nearby horizontal
-        neighbors, averaged vertically. Persistent narrow streaks increase it.
+        Severity of persistent dark streaks, accounting for width and darkness.
     speckles:
         Count/strength of isolated dark or light pixels compared with a median
         filter. This is only a proxy: real punctuation can also be isolated.
@@ -136,6 +160,7 @@ def score_image(path):
     """
     gray = load_gray(path)
     original_h, original_w = gray.shape
+    vertical_lines = vertical_line_score(gray)
 
     scale = min(1.0, MAX_SCORE_DIMENSION / max(original_h, original_w))
     if scale < 1.0:
@@ -149,20 +174,6 @@ def score_image(path):
     work = gray[by:max(by + 1, h - by), bx:max(bx + 1, w - bx)]
     if work.size == 0:
         work = gray
-
-    # Detect persistent vertical streaks relative to nearby columns. Using
-    # blurred pixels makes this less sensitive to individual letters/speckles.
-    blurred = cv2.GaussianBlur(work, (3, 3), 0)
-    f = blurred.astype(np.float32)
-    left = np.roll(f, 2, axis=1)
-    right = np.roll(f, -2, axis=1)
-    vertical_residual = np.abs(f - (left + right) / 2.0)
-
-    # Aggregate by column; a real streak tends to persist through many rows.
-    column_strength = np.mean(vertical_residual, axis=0)
-    # Remove the baseline contribution from normal text/paper texture.
-    baseline = float(np.median(column_strength))
-    vertical_lines = float(np.mean(np.maximum(column_strength - baseline, 0)))
 
     # Isolated-pixel residual from a 3x3 median filter. Count both dark and
     # light deviations, but ignore small differences due to compression/noise.
@@ -302,6 +313,7 @@ def main():
 
     report_path = dst / "045-find-best-scan.csv"
     started = time.time_ns()
+    script_mtime = Path(__file__).stat().st_mtime_ns
     tasks = []
     for number, candidates in sorted(pages.items()):
         default_output = dst / candidates[0].name
@@ -309,7 +321,7 @@ def main():
         output = default_output
         if existing and default_output not in existing:
             output = existing[0]
-        newest_input = max(path.stat().st_mtime_ns for path in candidates)
+        newest_input = max(script_mtime, *(path.stat().st_mtime_ns for path in candidates))
         if args.force or newest_input > file_mtime(output):
             tasks.append((number, candidates, output, max(started, newest_input)))
 
