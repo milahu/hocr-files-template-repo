@@ -123,6 +123,9 @@ GRAY_GRADIENT_MAX_WIDTH = 12
 # A pixel is considered white when all BGR channels reach this value.
 GRAY_GRADIENT_WHITE_THRESHOLD = 245
 
+# Paper near the scanner-cropped edge can be slightly darker or uneven.
+SCAN_TOP_SHADOW_WHITE_THRESHOLD = 240
+
 # Maximum difference between the highest and lowest BGR channel.
 # This rejects transitions towards cyan, magenta, yellow, etc.
 GRAY_GRADIENT_NEUTRAL_TOLERANCE = 14
@@ -1644,8 +1647,7 @@ def remove_background_outside_page(
     Remove scanner background outside the detected page boundary.
 
     The three visible page edges follow their detected curves.
-    The edge specified by scan_top_edge is left untouched and
-    represented by the corresponding output-image boundary.
+    The scanned top edge follows the output-image boundary.
 
     edge_points contains original-image coordinates.
     Mrot maps original -> rotated.
@@ -1782,6 +1784,9 @@ def remove_background_outside_page(
         | (gradient_mask > 0)
     )
 
+    if getattr(config, "clean_scan_top_shadow", True):
+        mask_scan_top_shadow(image, outside, cropped_edge)
+
     if transparent and image.ndim == 3 and image.shape[2] == 4:
         image[outside] = (0, 0, 0, 0)
     else:
@@ -1910,6 +1915,42 @@ def constrain_edge_points(
     result[:, value_axis] = constrained
 
     return result
+
+
+def mask_scan_top_shadow(image, outside, edge):
+    """Mark a shallow, neutral shadow leading from the scan edge to white paper."""
+    # Orient the views so depth into the page is the first axis.
+    if edge == EDGE_BOTTOM:
+        image, outside = image[::-1], outside[::-1]
+    elif edge == EDGE_LEFT:
+        image, outside = image.swapaxes(0, 1), outside.T
+    elif edge == EDGE_RIGHT:
+        image, outside = image[:, ::-1].swapaxes(0, 1), outside[:, ::-1].T
+
+    # Include enough samples to confirm white after the deepest shadow.
+    white_run = GRAY_GRADIENT_WHITE_RUN
+    strip = image[:GRAY_GRADIENT_MAX_WIDTH + white_run]
+    if len(strip) < white_run + 1:
+        return
+
+    strip = strip[:, :, :3] if strip.ndim == 3 else strip[:, :, None]
+    darkest = strip.min(axis=2)
+    neutral = strip.max(axis=2) - darkest <= GRAY_GRADIENT_NEUTRAL_TOLERANCE
+    white = darkest >= SCAN_TOP_SHADOW_WHITE_THRESHOLD
+    runs = np.lib.stride_tricks.sliding_window_view(white, white_run, axis=0)
+    sustained_white = runs.all(axis=-1)
+    white_start = sustained_white.argmax(axis=0)
+
+    # A shadow can dip to black, so allow fluctuations before the white run.
+    # Keep the transition bounded and reject colored pixels in the prefix.
+    depth = np.arange(len(strip))[:, None]
+    shadow = depth < white_start
+    confirmed = (
+        sustained_white.any(axis=0)
+        & ~white[0]
+        & np.all(neutral | ~shadow, axis=0)
+    )
+    outside[:len(strip)] |= shadow & confirmed
 
 
 def detect_white_gradient_depth(
@@ -2045,7 +2086,7 @@ def build_white_gradient_mask(
 
     for edge, sort_axis, dx, dy in edge_specs:
 
-        # Never clean the scanner-cropped edge.
+        # The scanner-cropped edge uses a boundary-based shadow mask.
         if edge == cropped_edge:
             continue
 
@@ -3555,8 +3596,8 @@ def process_image(in_path, out_path):
 
     # 8c. Remove scanner background outside the actual curved page edges.
     #
-    # The scanner-cropped edge is left untouched.
-    # The other three edges follow their detected point curves.
+    # The scanner-cropped edge uses the output boundary for shadow detection.
+    # The other edges follow their detected point curves.
     if CLEAN_GRAY_EDGE_ARTIFACTS:
         warped = remove_background_outside_page(
             image=warped,
